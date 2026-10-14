@@ -1,8 +1,9 @@
 """Tüm LLM çağrılarının geçtiği tek kapı (CLAUDE.md değişmez 6).
 
-Sağlayıcı katman bazında seçilir (config: KYS_MODEL_FAST / KYS_MODEL_SMART):
+Sağlayıcı katman bazında seçilir (config: KYS_MODEL_FAST / KYS_MODEL_SMART / KYS_MODEL_QUERY):
 - anthropic: Claude, Anthropic SDK ile (yapılandırılmış çıktı + prompt önbelleği)
 - ollama: yerel model, Ollama /api/chat ile (JSON şema kısıtlı çıktı); ücretsiz, veri makineden çıkmaz
+- openai: OpenAI uyumlu herhangi bir uç nokta (KYS_OPENAI_BASE_URL); GLM, Gemini, Workers AI, OpenRouter...
 Durma nedeni kontrolü ve `llm_calls` loglaması her iki sağlayıcı için burada yapılır.
 """
 
@@ -21,7 +22,7 @@ from pydantic import BaseModel, ValidationError
 from .config import ModelSpec, settings
 
 T = TypeVar("T", bound=BaseModel)
-Tier = Literal["fast", "smart"]
+Tier = Literal["fast", "smart", "query"]
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
@@ -36,7 +37,7 @@ def client() -> anthropic.Anthropic:
 
 
 def model_for(tier: Tier) -> ModelSpec:
-    return settings.model_fast if tier == "fast" else settings.model_smart
+    return {"fast": settings.model_fast, "smart": settings.model_smart, "query": settings.model_query}[tier]
 
 
 def _log(conn: sqlite3.Connection | None, *, purpose: str, model: str, usage=None,
@@ -69,7 +70,7 @@ def structured(
 ) -> T:
     """Şemaya uygun, doğrulanmış bir Pydantic nesnesi döndürür; aksi halde LLMError."""
     spec = model_for(tier)
-    call = _ollama if spec.provider == "ollama" else _anthropic
+    call = {"ollama": _ollama, "openai": _openai}.get(spec.provider, _anthropic)
     try:
         out, usage, stop = call(spec.model, system, user, schema, max_tokens, effort)
     except LLMError as e:
@@ -158,3 +159,57 @@ def _ollama(model: str, system: str, user: str, schema: type[T], max_tokens: int
         return schema.model_validate_json(data["message"]["content"]), usage, stop
     except (ValidationError, KeyError) as e:
         raise _fail(f"model çıktısı şemaya uymuyor: {e}", usage, stop) from e
+
+
+# --- OpenAI uyumlu uç noktalar ----------------------------------------------
+
+def _post_json(url: str, body: dict, headers: dict) -> dict:
+    req = urllib.request.Request(url, json.dumps(body).encode("utf-8"),
+                                 {"Content-Type": "application/json", **headers})
+    with urllib.request.urlopen(req, timeout=settings.ollama_timeout) as r:
+        return json.load(r)
+
+
+def _openai(model: str, system: str, user: str, schema: type[T], max_tokens: int, effort):
+    if not settings.openai_base_url:
+        raise _fail("KYS_OPENAI_BASE_URL tanımlı değil")
+    url = f"{settings.openai_base_url}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.openai_api_key}"} if settings.openai_api_key else {}
+    json_schema = _inline_refs(schema.model_json_schema())
+    body = {
+        "model": model,
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "response_format": {"type": "json_schema",
+                            "json_schema": {"name": schema.__name__, "schema": json_schema}},
+    }
+    try:
+        try:
+            data = _post_json(url, body, headers)
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                raise
+            # json_schema desteklemeyen sağlayıcılar: JSON kipine düş, şemayı prompta yaz.
+            body["response_format"] = {"type": "json_object"}
+            body["messages"][0]["content"] = (
+                f"{system}\n\nYalnızca şu JSON şemasına uyan tek bir JSON nesnesi döndür:\n"
+                f"{json.dumps(json_schema, ensure_ascii=False)}")
+            data = _post_json(url, body, headers)
+    except urllib.error.HTTPError as e:
+        raise _fail(f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}") from e
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise _fail(f"uç noktaya ulaşılamadı ({settings.openai_base_url}): {e}") from e
+
+    u = data.get("usage") or {}
+    usage = SimpleNamespace(input_tokens=u.get("prompt_tokens"), output_tokens=u.get("completion_tokens"))
+    try:
+        choice = data["choices"][0]
+        stop = choice.get("finish_reason")
+        if stop == "length":
+            raise _fail("geçerli çıktı alınamadı (max_tokens)", usage, stop)
+        content = choice["message"]["content"] or ""
+        content = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        return schema.model_validate_json(content), usage, stop
+    except (ValidationError, KeyError, IndexError) as e:
+        raise _fail(f"model çıktısı şemaya uymuyor: {e}", usage) from e

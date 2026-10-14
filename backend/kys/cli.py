@@ -182,6 +182,46 @@ def cmd_scheduled(args) -> None:
             sys.stdout, sys.stderr = sys.__stdout__, sys.__stderr__
 
 
+def publish_snapshot(src_conn, out: Path) -> Path:
+    """Sorgu servisi için salt okunur kopya: tek dosya (WAL yok), LLM logları ve yerel yollar hariç."""
+    import sqlite3
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".tmp")
+    tmp.unlink(missing_ok=True)
+    from contextlib import closing
+    with closing(sqlite3.connect(tmp)) as dst:  # closing: Windows'ta dosya kilidi kalmasın
+        src_conn.backup(dst)
+        dst.execute("DELETE FROM llm_calls")
+        from pathlib import PureWindowsPath
+        dst.executemany("UPDATE documents SET file_path = ? WHERE id = ?",  # yerel ağ yolları dışarı çıkmasın
+                        [(PureWindowsPath(fp).name, i) for i, fp in dst.execute("SELECT id, file_path FROM documents")])
+        dst.commit()  # journal_mode açık bir işlem içinde sessizce değişmez
+        dst.execute("PRAGMA journal_mode = DELETE")
+        dst.execute("VACUUM")
+    tmp.replace(out)
+    return out
+
+
+def cmd_publish(args) -> None:
+    from .config import LOCAL_HOME
+    conn = _conn()
+    out = Path(args.out) if args.out else LOCAL_HOME / "publish" / "kys-query.db"
+    publish_snapshot(conn, out)
+    n = conn.execute("SELECT COUNT(*) FROM documents WHERE status = 'YURURLUKTE'").fetchone()[0]
+    print(f"Yayın kopyası hazır: {out} ({out.stat().st_size / 1e6:.1f} MB, {n} yürürlükteki doküman)")
+    print("Sorgu servisine yükleyin (KYS_DB_PATH ile bağlayın veya KYS_DB_URL ile indirtin).")
+
+
+def cmd_serve(args) -> None:
+    import os
+
+    import uvicorn
+    if args.db:
+        os.environ["KYS_DB_PATH"] = str(Path(args.db).resolve())
+    print(f"http://localhost:{args.port}{settings.base_path.rstrip('/')}/  (durdurmak için Ctrl+C)")
+    uvicorn.run("kys.api.app:app", host=args.host, port=args.port)
+
+
 def cmd_stats(args) -> None:
     conn = _conn()
     for r in conn.execute(
@@ -222,6 +262,14 @@ def main(argv=None) -> None:
     s.add_argument("--limit", type=int)
     s.add_argument("--redo", action="store_true", help="daha önce sınıflandırılanları da tekrar işle")
     s.set_defaults(fn=cmd_classify)
+    s = sub.add_parser("publish", help="sorgu servisi için salt okunur veritabanı kopyası üret")
+    s.add_argument("--out", help="çıktı dosyası (varsayılan: %%LOCALAPPDATA%%\\kys-agent\\publish\\kys-query.db)")
+    s.set_defaults(fn=cmd_publish)
+    s = sub.add_parser("serve", help="sorgu servisini yerelde çalıştır (web + API + MCP)")
+    s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--db", help="kullanılacak veritabanı (varsayılan: KYS_DB_PATH)")
+    s.set_defaults(fn=cmd_serve)
     s = sub.add_parser("scheduled", help="zamanlanmış iş: yükle + sınıflandır, log dosyasına yaz")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn=cmd_scheduled)

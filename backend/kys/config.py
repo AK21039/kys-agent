@@ -12,7 +12,8 @@ load_dotenv(PROJECT_ROOT / ".env")
 # SQLite ağ paylaşımında (W:) güvenilir kilitlenmez; veritabanı varsayılan olarak yerel diskte durur.
 LOCAL_HOME = Path(os.getenv("LOCALAPPDATA", Path.home())) / "kys-agent"
 
-PROVIDERS = ("anthropic", "ollama")
+# openai: OpenAI uyumlu herhangi bir uç nokta (GLM, Gemini, Workers AI, OpenRouter, Groq, LM Studio...)
+PROVIDERS = ("anthropic", "ollama", "openai")
 
 
 @dataclass(frozen=True)
@@ -36,11 +37,19 @@ class ModelSpec:
 class Settings:
     model_fast: ModelSpec
     model_smart: ModelSpec
+    model_query: ModelSpec          # sorgu servisi (asistan cevapları)
     db_path: Path
     overrides_path: Path
     ollama_url: str
     ollama_num_ctx: int
     ollama_timeout: int
+    openai_base_url: str
+    openai_api_key: str
+    # Sorgu servisi
+    base_path: str                  # ör. "/qa" → paktenops.com/qa
+    access_token: str               # boşsa kimlik doğrulama yok (yalnızca yerel kullanım)
+    db_url: str                     # konteyner açılışında DB yoksa buradan indirilir
+    allowed_hosts: tuple[str, ...]  # MCP için Host başlığı beyaz listesi (boşsa kontrol yok)
 
 
 def _resolve(path: str) -> Path:
@@ -51,10 +60,17 @@ def _resolve(path: str) -> Path:
 settings = Settings(
     model_fast=ModelSpec.parse(os.getenv("KYS_MODEL_FAST", "ollama:gemma4:latest")),
     model_smart=ModelSpec.parse(os.getenv("KYS_MODEL_SMART", "anthropic:claude-sonnet-5-5")),
+    model_query=ModelSpec.parse(os.getenv("KYS_MODEL_QUERY", "anthropic:claude-haiku-5-5")),
     db_path=_resolve(os.getenv("KYS_DB_PATH", str(LOCAL_HOME / "kys.db"))),
     # Elle düzeltmeler dokümanların yanında (ağ paylaşımında, yedekli) durur; DB yeniden kurulsa da korunur.
     overrides_path=_resolve(os.getenv("KYS_OVERRIDES_PATH", "data/kys_overrides.json")),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/"),
     ollama_num_ctx=int(os.getenv("KYS_OLLAMA_NUM_CTX", "16384")),
     ollama_timeout=int(os.getenv("KYS_OLLAMA_TIMEOUT", "900")),
+    openai_base_url=os.getenv("KYS_OPENAI_BASE_URL", "").rstrip("/"),
+    openai_api_key=os.getenv("KYS_OPENAI_API_KEY", ""),
+    base_path="/" + os.getenv("KYS_BASE_PATH", "/qa").strip("/"),
+    access_token=os.getenv("KYS_ACCESS_TOKEN", ""),
+    db_url=os.getenv("KYS_DB_URL", ""),
+    allowed_hosts=tuple(h.strip() for h in os.getenv("KYS_ALLOWED_HOSTS", "").split(",") if h.strip()),
 )

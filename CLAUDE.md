@@ -12,7 +12,10 @@ Türkçe alan adlarını kullanır (ontoloji enum değerleri ASCII Türkçe: `PR
   - `textnorm.py` — Türkçe katlama (`fold`) ve alıntı doğrulama (`verify_quote`)
   - `llm.py` — TÜM Claude çağrılarının geçtiği kapı (model seçimi, yapılandırılmış çıktı, loglama)
   - `ingest/` — ayrıştırma, bölümleme, metadata, sınıflandırma, yükleme hattı
-  - `cli.py` — `python -m kys.cli ...`
+  - `overrides.py` — kullanıcı düzeltmeleri (data/kys_overrides.json, DB yeniden kurulsa da korunur)
+  - `query/` — salt okunur katalog, arama, kaynaklı asistan (alıntı doğrulamalı)
+  - `api/` — sorgu servisi: FastAPI (web + REST) + MCP; konteyner olarak çalışır (Dockerfile, docs/DEPLOY.md)
+  - `cli.py` — `kys ...` komutu
 - `backend/tests/` — pytest
 - `data/` — yerel veritabanı ve şirket dokümanları (git'e girmez)
 

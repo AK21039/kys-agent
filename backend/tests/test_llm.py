@@ -131,3 +131,47 @@ def test_ollama_unreachable_raises(monkeypatch):
     monkeypatch.setattr(llm.urllib.request, "urlopen", down)
     with pytest.raises(llm.LLMError, match="ulaşılamadı"):
         llm.structured(purpose="sinif", tier="fast", system="S", user="U", schema=Out)
+
+
+# --- OpenAI uyumlu ------------------------------------------------------------
+
+def _use_openai(monkeypatch):
+    monkeypatch.setattr(llm, "settings", dataclasses.replace(
+        llm.settings, model_query=ModelSpec.parse("openai:glm-4.5-flash"),
+        openai_base_url="https://ornek.ai/v1", openai_api_key="k"))
+
+
+def _openai_reply(content, finish="stop"):
+    return io.BytesIO(json.dumps({"choices": [{"message": {"content": content}, "finish_reason": finish}],
+                                  "usage": {"prompt_tokens": 30, "completion_tokens": 5}}).encode())
+
+
+def test_openai_compatible_uses_json_schema(conn, monkeypatch):
+    _use_openai(monkeypatch)
+    sent = {}
+
+    def urlopen(req, timeout):
+        sent["url"], sent["body"], sent["auth"] = req.full_url, json.loads(req.data), req.get_header("Authorization")
+        return _openai_reply('{"value": "ok"}')
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    out = llm.structured(purpose="sorgu", tier="query", system="S", user="U", schema=Out, conn=conn)
+    assert out.value == "ok"
+    assert sent["url"] == "https://ornek.ai/v1/chat/completions" and sent["auth"] == "Bearer k"
+    assert sent["body"]["response_format"]["type"] == "json_schema"
+    assert tuple(conn.execute("SELECT model, input_tokens FROM llm_calls").fetchone()) == ("openai:glm-4.5-flash", 30)
+
+
+def test_openai_compatible_falls_back_to_json_mode(monkeypatch):
+    _use_openai(monkeypatch)
+    calls = []
+
+    def urlopen(req, timeout):
+        body = json.loads(req.data)
+        calls.append(body["response_format"]["type"])
+        if body["response_format"]["type"] == "json_schema":
+            raise llm.urllib.error.HTTPError(req.full_url, 400, "bad", {}, io.BytesIO(b"unsupported"))
+        assert "JSON şemasına" in body["messages"][0]["content"]
+        return _openai_reply('```json\n{"value": "ok"}\n```')
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    assert llm.structured(purpose="s", tier="query", system="S", user="U", schema=Out).value == "ok"
+    assert calls == ["json_schema", "json_object"]

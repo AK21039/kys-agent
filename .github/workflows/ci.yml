@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e "backend[dev,server]"
+      - run: pytest -q
+        working-directory: backend
+
+  image:
+    # Konteyner imajı: ghcr.io/ak21039/kys-agent (depo gizli olduğu için imaj da gizlidir)
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/ak21039/kys-agent:latest
+            ghcr.io/ak21039/kys-agent:${{ github.sha }}
+      - name: Duman testi (veritabanısız açılış + sağlık kontrolü)
+        run: |
+          docker run -d --name kys -p 8080:8080 ghcr.io/ak21039/kys-agent:${{ github.sha }}
+          for i in $(seq 1 20); do curl -fs http://localhost:8080/qa/api/health && break; sleep 1; done
+          curl -fs http://localhost:8080/qa/ | grep -q "KYS Sorgu"
+          docker logs kys
