@@ -8,7 +8,15 @@ from .config import settings
 from .textnorm import fold
 
 # Şema ilk kurulduktan sonraki kolon değişiklikleri: (sürüm, SQL). Yalnızca sona ekle.
-MIGRATIONS: list[tuple[int, str]] = []
+MIGRATIONS: list[tuple[int, str]] = [
+    (1, """ALTER TABLE process_steps ADD COLUMN decision TEXT;
+           ALTER TABLE process_steps ADD COLUMN next_steps TEXT;     -- JSON: [seq, ...]
+           ALTER TABLE process_steps ADD COLUMN inputs TEXT;         -- JSON
+           ALTER TABLE process_steps ADD COLUMN outputs TEXT;        -- JSON
+           ALTER TABLE process_steps ADD COLUMN system TEXT;
+           ALTER TABLE process_steps ADD COLUMN quote TEXT;
+           ALTER TABLE processes ADD COLUMN document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE;"""),
+]
 
 
 def connect(path: Path | str | None = None, readonly: bool = False) -> sqlite3.Connection:

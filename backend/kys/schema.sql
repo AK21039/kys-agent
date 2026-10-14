@@ -210,6 +210,17 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     created_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Kural/ilişki çıkarımı kayıtları (doküman başına son içe aktarım; tekrar içe aktarmada eskisi silinir).
+CREATE TABLE IF NOT EXISTS extraction_runs (
+    id            INTEGER PRIMARY KEY,
+    document_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    extractor     TEXT NOT NULL,          -- 'ajan:claude-code' | model adı
+    source_file   TEXT,
+    n_rules       INTEGER, n_dropped INTEGER, n_roles INTEGER, n_steps INTEGER, n_refs INTEGER,
+    observations  TEXT,                   -- JSON liste
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT (datetime('now'))

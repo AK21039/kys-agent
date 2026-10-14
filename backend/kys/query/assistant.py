@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from .. import llm
 from ..textnorm import verify_quote
-from .retrieval import retrieve
+from .retrieval import retrieve_for_question
 
 SYSTEM = resources.files("kys").joinpath("prompts/assistant.md").read_text(encoding="utf-8")
 MAX_SOURCE_CHARS = 3000
@@ -33,7 +33,7 @@ def _source_label(r: sqlite3.Row) -> str:
 
 
 def ask(conn: sqlite3.Connection, question: str, limit: int = 8) -> dict:
-    rows = retrieve(conn, question, limit=limit)
+    rows = retrieve_for_question(conn, question, limit=limit)
     sources = [{"no": i + 1, "section_id": r["section_id"], "code": r["code"], "revision": r["revision"],
                 "clause_no": r["clause_no"], "heading": r["heading"], "title": r["title"]}
                for i, r in enumerate(rows)]

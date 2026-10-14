@@ -222,6 +222,46 @@ def cmd_serve(args) -> None:
     uvicorn.run("kys.api.app:app", host=args.host, port=args.port)
 
 
+def cmd_extract_export(args) -> None:
+    from .extract import workflow
+    conn = _conn()
+    files = workflow.export(conn, only_missing=not args.all)
+    print(f"{len(files)} doküman dışa aktarıldı → {workflow.work_dir() / 'in'}")
+
+
+def cmd_extract_check(args) -> None:
+    from .extract import workflow
+    conn = _conn()
+    failed = 0
+    for f in args.files:
+        _, r = workflow.check(conn, Path(f))
+        failed += not r.ok
+        print(f"[{'TAMAM' if r.ok else 'HATA '}] {Path(f).name}  {r.counts}")
+        for e in r.errors:
+            print(f"    ! {e}")
+        for q in r.bad_quotes:
+            print(f"    ! Kaynakta birebir bulunamayan alıntı → {q}")
+    sys.exit(1 if failed else 0)
+
+
+def cmd_extract_import(args) -> None:
+    from .extract import workflow
+    conn = _conn()
+    files = [Path(f) for f in args.files] or sorted((workflow.work_dir() / "out").glob("*.json"))
+    totals = {"dosya": 0, "kural": 0, "atilan": 0}
+    for f in files:
+        r = workflow.import_file(conn, f)
+        if r.errors and not r.counts:
+            print(f"[HATA ] {f.name}: {r.errors[0][:200]}")
+            continue
+        totals["dosya"] += 1
+        totals["kural"] += r.counts.get("eklenen_kural", 0)
+        totals["atilan"] += r.counts.get("atilan", 0)
+        print(f"[ok   ] {f.name}  {r.counts}")
+    print(f"\n{totals['dosya']} doküman, {totals['kural']} kural eklendi (ONERILDI), "
+          f"{totals['atilan']} kanıtsız öğe atıldı.")
+
+
 def cmd_stats(args) -> None:
     conn = _conn()
     for r in conn.execute(
@@ -262,6 +302,15 @@ def main(argv=None) -> None:
     s.add_argument("--limit", type=int)
     s.add_argument("--redo", action="store_true", help="daha önce sınıflandırılanları da tekrar işle")
     s.set_defaults(fn=cmd_classify)
+    s = sub.add_parser("extract-export", help="kural çıkarımı için dokümanları data/extract/in'e aktar")
+    s.add_argument("--all", action="store_true", help="çıktısı olanları da yeniden aktar")
+    s.set_defaults(fn=cmd_extract_export)
+    s = sub.add_parser("extract-check", help="çıkarım JSON'unu doğrula (şema + birebir alıntı), DB'ye yazmaz")
+    s.add_argument("files", nargs="+")
+    s.set_defaults(fn=cmd_extract_check)
+    s = sub.add_parser("extract-import", help="çıkarım JSON'larını içe aktar (kurallar ONERILDI girer)")
+    s.add_argument("files", nargs="*")
+    s.set_defaults(fn=cmd_extract_import)
     s = sub.add_parser("publish", help="sorgu servisi için salt okunur veritabanı kopyası üret")
     s.add_argument("--out", help="çıktı dosyası (varsayılan: %%LOCALAPPDATA%%\\kys-agent\\publish\\kys-query.db)")
     s.set_defaults(fn=cmd_publish)

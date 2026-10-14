@@ -143,3 +143,49 @@ def test_classify_existing_continues_after_model_error(conn, tmp_path, monkeypat
     monkeypatch.setattr(classify_mod, "classify", lambda *a, **k: (_ for _ in ()).throw(LLMError("zaman aşımı")))
     results = classify_existing(conn)
     assert results[0].error and conn.execute("SELECT summary FROM documents").fetchone()[0] is None
+
+
+def test_extraction_check_and_import(conn, tmp_path):
+    import json
+
+    from kys.extract import workflow
+    ingest_paths(conn, make_docx(tmp_path / "a.docx"), use_llm=False)
+    doc_id = conn.execute("SELECT id FROM documents").fetchone()[0]
+    out = tmp_path / "x.json"
+    payload = {
+        "document_id": doc_id, "document_code": "PR-04",
+        "roles": [{"name": "Genel Müdür", "aliases": ["GM"]}, {"name": "Satınalma Müdürü"}],
+        "rules": [
+            {"rule_type": "ONAY", "statement": "Genel Müdür 100.000 TL üzeri talepleri onaylar.",
+             "subject": "Genel Müdür", "action": "onaylar", "object": "satınalma talebi",
+             "threshold_op": ">", "threshold_value": 100000, "threshold_unit": "TRY", "clause_no": "4.2",
+             "quote": "Satınalma talebi 100.000 TL'yi aşarsa Genel Müdür onaylar."},
+            {"rule_type": "ONAY", "statement": "Uydurma kural.", "subject": "GM",
+             "quote": "Satınalma talebi 1 TL'yi aşarsa Yönetim Kurulu onaylar."},
+        ],
+        "steps": [{"seq": 1, "name": "Talep", "responsible": "Satınalma Müdürü", "next_steps": [2]},
+                  {"seq": 2, "name": "Onay", "approver": "Genel Müdür"}],
+        "references": [{"target": "FR-12", "relation": "KULLANIR", "quote": "Satınalma Talep Formu ile yapılır"},
+                       {"target": "PR-08", "relation": "REFERANS_VERIR", "quote": "Tedarikçi seçimi için PR-08'e bakınız"}],
+        "observations": ["4.1'de talebi kimin açacağı yazmıyor."],
+    }
+    out.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    _, rep = workflow.check(conn, out)
+    assert not rep.ok and len(rep.bad_quotes) == 1
+
+    rep = workflow.import_file(conn, out)
+    assert rep.counts["eklenen_kural"] == 1 and rep.counts["atilan"] == 1
+    rule = conn.execute("SELECT * FROM rules").fetchone()
+    assert (rule["review_status"], rule["threshold_value"], rule["clause_no"]) == ("ONERILDI", 100000, "4.2")
+    gm = conn.execute("SELECT id FROM entities WHERE normalized_name = 'genel mudur'").fetchone()[0]
+    assert rule["subject_entity_id"] == gm
+    assert conn.execute("SELECT COUNT(*) FROM process_steps").fetchone()[0] == 2
+    assert conn.execute("SELECT next_steps FROM process_steps WHERE seq = 1").fetchone()[0] == "[2]"
+    assert conn.execute("SELECT COUNT(*) FROM edges WHERE rel_type = 'KULLANIR'").fetchone()[0] == 1
+
+    # Tekrar içe aktarma çoğaltmaz; onaylanmış kural korunur.
+    conn.execute("UPDATE rules SET review_status = 'ONAYLANDI'")
+    workflow.import_file(conn, out)
+    assert conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0] == 1  # onaylı kural tekrar önerilmez
+    assert conn.execute("SELECT COUNT(*) FROM processes").fetchone()[0] == 1

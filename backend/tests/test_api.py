@@ -108,3 +108,15 @@ def test_mcp_tools_in_process(published):
     names, res, doc = asyncio.run(run())
     assert {"search_documents", "get_document", "list_documents", "missing_references"} <= names
     assert "PR-08" in str(res.content) and "Tedarikçi" in str(doc.content)
+
+
+def test_named_document_sections_come_first(published):
+    import sqlite3
+
+    from kys.query.retrieval import retrieve_for_question
+    c = sqlite3.connect(published)
+    c.row_factory = sqlite3.Row
+    rows = retrieve_for_question(c, '"Tedarikçi Değerlendirme Prosedürü"ne aykırı bir süreç var mı?')
+    assert rows[0]["code"] == "PR-08"
+    rows = retrieve_for_question(c, "PR-04 dokümanında onay limitleri")
+    assert rows[0]["code"] == "PR-04"
