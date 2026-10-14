@@ -1,0 +1,32 @@
+[project]
+name = "kys"
+version = "0.1.0"
+description = "KYS Ajan Sistemi: kalite yönetim sistemi bilgi tabanı ve analiz ajanları"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.70",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+    "python-docx>=1.1",
+    "pdfplumber>=0.11",
+    "openpyxl>=3.1",
+]
+
+[project.scripts]
+kys = "kys.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "reportlab>=4"]  # reportlab: testte PDF fixture üretmek için
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["kys*"]
+
+[tool.setuptools.package-data]
+kys = ["schema.sql", "prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
