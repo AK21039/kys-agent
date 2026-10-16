@@ -112,6 +112,20 @@ def find_codes(text: str) -> list[str]:
     return out
 
 
+_FILENAME_CODE = re.compile(
+    r"^\s*([A-ZÇĞİÖŞÜ]{1,5}\d{0,3}(?:[.\-_][A-ZÇĞİÖŞÜ0-9]{1,5}){0,3}[.\-_](?:\d{0,3}X(?![^\W\d_])|\d{1,4}))(?=[\s_\-]|[^\W\d_]|$)")
+
+
+def filename_code(stem: str) -> str | None:
+    """Dosya adının BAŞINDAKİ kodu verir. find_codes'tan farkı: kod başlığa bitişik olabilir
+    ("ISG-TL-001Taşeron...") ve numara yer tutucu olabilir ("PR.YP-0X")."""
+    m = _FILENAME_CODE.match(stem)
+    if m:
+        return m.group(1)
+    codes = find_codes(stem)
+    return codes[0] if codes else None
+
+
 def parse_date(text: str) -> str | None:
     m = _DATE_RE.search(text or "")
     if not m:
@@ -284,8 +298,8 @@ def detect(path: Path, header_text: str, body_text: str) -> DocMeta:
         meta.code, meta.sources["code"] = _code_from_value(kv["code"]), "baslik_tablosu"
     elif "code" in iv and _code_from_value(iv["code"]):
         meta.code, meta.sources["code"] = _code_from_value(iv["code"]), "baslik_satiri"
-    elif find_codes(path.stem):
-        meta.code, meta.sources["code"] = find_codes(path.stem)[0], "dosya_adi"
+    elif filename_code(path.stem):
+        meta.code, meta.sources["code"] = filename_code(path.stem), "dosya_adi"
     elif find_codes(header_text):
         meta.code, meta.sources["code"] = find_codes(header_text)[0], "metin"
 

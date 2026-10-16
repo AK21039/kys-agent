@@ -72,22 +72,22 @@ def apply_override(meta: metadata.DocMeta, sha: str) -> bool:
     return True
 
 
-def ingest_file(conn: sqlite3.Connection, path: Path, use_llm: bool = True) -> IngestResult:
+def ingest_file(conn: sqlite3.Connection, path: Path, use_llm: bool = True, ocr: bool = True) -> IngestResult:
     try:
-        return _ingest_file(conn, path, use_llm)
+        return _ingest_file(conn, path, use_llm, ocr)
     except Exception:
         conn.rollback()  # yarım kalan doküman/bölüm kaydı bırakma
         raise
 
 
-def _ingest_file(conn: sqlite3.Connection, path: Path, use_llm: bool) -> IngestResult:
+def _ingest_file(conn: sqlite3.Connection, path: Path, use_llm: bool, ocr: bool = True) -> IngestResult:
     sha = _sha256(path)
     row = conn.execute("SELECT id, code, revision FROM documents WHERE file_sha256 = ?", (sha,)).fetchone()
     if row:
         return IngestResult(path, "atlandi", row["id"], row["code"], row["revision"], message="aynı dosya zaten yüklü")
 
     try:
-        parsed = parse(path)
+        parsed = parse(path, ocr=ocr)
     except UnsupportedFormat as e:
         return IngestResult(path, "hata", message=str(e))
     except Exception as e:  # bozuk / şifreli dosya
@@ -156,7 +156,14 @@ def _ingest_file(conn: sqlite3.Connection, path: Path, use_llm: bool) -> IngestR
     if supersedes:
         _add_edge(conn, NodeKind.DOKUMAN, doc_id, RelType.YERINE_GECER, NodeKind.DOKUMAN, supersedes, doc_id)
 
-    for s in split_sections(parsed.body_text):
+    _insert_sections(conn, doc_id, key, parsed.body_text)
+    conn.commit()
+    return IngestResult(path, "eklendi", doc_id, meta.code, revision, str(meta.doc_type or DocType.DIGER),
+                        warnings=warnings)
+
+
+def _insert_sections(conn: sqlite3.Connection, doc_id: int, key: str, body_text: str) -> None:
+    for s in split_sections(body_text):
         sid = conn.execute(
             """INSERT INTO sections(document_id, ordinal, clause_no, heading, heading_path, text, search_text)
                VALUES (?,?,?,?,?,?,?)""",
@@ -168,9 +175,6 @@ def _ingest_file(conn: sqlite3.Connection, path: Path, use_llm: bool) -> IngestR
             if not key.split("#")[0].endswith(metadata.code_key(ref)):
                 conn.execute("INSERT OR IGNORE INTO doc_references(document_id, section_id, ref_code) VALUES (?,?,?)",
                              (doc_id, sid, ref))
-    conn.commit()
-    return IngestResult(path, "eklendi", doc_id, meta.code, revision, str(meta.doc_type or DocType.DIGER),
-                        warnings=warnings)
 
 
 def _add_edge(conn, src_kind, src_id, rel, dst_kind, dst_id, document_id, section_id=None) -> None:
@@ -205,10 +209,10 @@ def resolve_references(conn: sqlite3.Connection) -> tuple[int, int]:
     return resolved, remaining
 
 
-def ingest_paths(conn: sqlite3.Connection, root: Path, use_llm: bool = True, progress=None) -> list[IngestResult]:
+def ingest_paths(conn: sqlite3.Connection, root: Path, use_llm: bool = True, progress=None, ocr: bool = True) -> list[IngestResult]:
     results = []
     for path in iter_files(root):
-        r = ingest_file(conn, path, use_llm=use_llm)
+        r = ingest_file(conn, path, use_llm=use_llm, ocr=ocr)
         results.append(r)
         if progress:
             progress(r)
@@ -289,3 +293,85 @@ def classify_existing(conn: sqlite3.Connection, limit: int | None = None, redo: 
             progress(r)
     resolve_references(conn)
     return results
+
+
+@dataclass
+class ReingestReport:
+    document_id: int
+    code: str
+    revision: str
+    old_chars: int
+    new_chars: int
+    applied: bool
+    warnings: list[str]
+    rules: int = 0                  # bu dokümana bağlı kurallar (silinmez)
+    extraction_edges: int = 0       # atıf dışı kenarlar (silinmez)
+    relinked: int = 0               # bölüm bağı korunan kayıt
+    unlinked: int = 0               # bölüm bağı kopan kayıt (alıntı hâlâ geçerli, madde bağı boş)
+    error: str | None = None
+
+
+def reingest_document(conn: sqlite3.Connection, code: str, apply: bool = False, ocr: bool = True) -> "ReingestReport | None":
+    """Kayıtlı dokümanın dosyasını yeniden ayrıştırır (OCR dahil) ve AYNI kayıt üzerinde günceller.
+
+    Kayıt silinmez: kimlik (id), kod/revizyon, durum, sınıflandırma ve kullanıcı düzeltmeleri korunur; kurallar ve
+    kenarlar dokümana bağlı kalır. Bölümler yeniden üretildiğinden kural/kenar bölüm bağları madde numarasıyla
+    (yoksa başlık yoluyla) yeniden kurulur. Varsayılan (apply=False) hiçbir şey yazmaz, yalnızca etkiyi raporlar.
+    """
+    row = conn.execute("SELECT * FROM documents WHERE code_key = ? ORDER BY created_at DESC LIMIT 1",
+                       (metadata.code_key(code),)).fetchone()
+    if not row:
+        return None
+    path = Path(row["file_path"])
+    rep = ReingestReport(row["id"], row["code"], row["revision"], len(row["body_text"]), 0, False, [])
+    if not path.exists():
+        rep.error = f"Dosya bulunamadı: {path}"
+        return rep
+    try:
+        parsed = parse(path, ocr=ocr)
+    except Exception as e:
+        rep.error = f"ayrıştırılamadı: {type(e).__name__}: {e}"
+        return rep
+    rep.new_chars = len(parsed.body_text)
+    rep.warnings = list(parsed.warnings)
+    did = row["id"]
+    rep.rules = conn.execute("SELECT COUNT(*) FROM rules WHERE document_id = ?", (did,)).fetchone()[0]
+    rep.extraction_edges = conn.execute("SELECT COUNT(*) FROM edges WHERE document_id = ? AND rel_type != ?",
+                                        (did, RelType.REFERANS_VERIR)).fetchone()[0]
+    if not apply:
+        return rep
+
+    old = {r["id"]: (r["clause_no"], r["heading_path"]) for r in
+           conn.execute("SELECT id, clause_no, heading_path FROM sections WHERE document_id = ?", (did,))}
+    links = {t: conn.execute(f"SELECT id, section_id FROM {t} WHERE document_id = ? AND section_id IS NOT NULL",
+                             (did,)).fetchall() for t in ("rules", "edges")}
+    try:
+        conn.execute("DELETE FROM edges WHERE document_id = ? AND rel_type = ?", (did, RelType.REFERANS_VERIR))
+        conn.execute("DELETE FROM doc_references WHERE document_id = ?", (did,))
+        conn.execute("DELETE FROM sections WHERE document_id = ?", (did,))
+        # Önceki uyarılardan OCR ile ilgili olanları yenileriyle değiştir.
+        prev = [w for w in json.loads(row["parse_warnings"] or "[]")
+                if not w.startswith(("OCR", "Metin katmanı çok az"))]
+        warnings = prev + parsed.warnings
+        conn.execute("UPDATE documents SET header_text = ?, body_text = ?, parse_warnings = ? WHERE id = ?",
+                     (parsed.header_text, parsed.body_text, json.dumps(warnings, ensure_ascii=False), did))
+        _insert_sections(conn, did, row["code_key"], parsed.body_text)
+        new = conn.execute("SELECT id, clause_no, heading_path FROM sections WHERE document_id = ?", (did,)).fetchall()
+        by_clause = {r["clause_no"]: r["id"] for r in new if r["clause_no"]}
+        by_path = {r["heading_path"]: r["id"] for r in new if r["heading_path"]}
+        for table, rows in links.items():
+            for r in rows:
+                clause, path_ = old.get(r["section_id"], (None, None))
+                sid = by_clause.get(clause) if clause else None
+                sid = sid or (by_path.get(path_) if path_ else None)
+                conn.execute(f"UPDATE {table} SET section_id = ? WHERE id = ?", (sid, r["id"]))
+                if sid:
+                    rep.relinked += 1
+                else:
+                    rep.unlinked += 1
+        resolve_references(conn)  # commit eder
+    except Exception:
+        conn.rollback()
+        raise
+    rep.applied = True
+    return rep

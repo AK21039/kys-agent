@@ -4,6 +4,7 @@ import json
 import sqlite3
 
 from .. import db
+from ..process import flow
 from ..ingest.metadata import code_key, known_segments, looks_like_doc_code
 
 MAX_DOC_CHARS = 60_000
@@ -78,3 +79,18 @@ def unresolved_references(conn: sqlite3.Connection) -> dict:
                               for r in rows if looks_like_doc_code(r["ref_code"], segments)],
         "probably_not_documents": [r["ref_code"] for r in rows if not looks_like_doc_code(r["ref_code"], segments)],
     }
+
+
+def get_process_flow(conn: sqlite3.Connection, code: str, with_pages: bool = True) -> dict | None:
+    """Süreç adımları + Mermaid metni. Orijinal PDF (veya önceden üretilmiş sayfa dizini) varsa adım başına sayfa no."""
+    p = flow.get_process(conn, code)
+    if not p:
+        return None
+    path, sha = p.pop("_file_path"), p.pop("_file_sha256")
+    p["page_count"], p["is_pdf"] = None, (path or "").lower().endswith(".pdf")
+    if with_pages and p["is_pdf"]:
+        from . import pages
+        p["page_count"] = pages.page_total(path, sha)
+        for s, pg in zip(p["steps"], pages.step_pages(path, sha, [s["quote"] for s in p["steps"]])):
+            s["page"] = pg
+    return p

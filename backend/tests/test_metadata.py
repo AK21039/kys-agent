@@ -118,3 +118,15 @@ def test_looks_like_doc_code_separates_machine_names():
 def test_detect_type_from_title_beats_code_prefix():
     meta = detect(Path("P-07 Kalite Politikası.docx"), "", "")
     assert meta.doc_type == DocType.POLITIKA
+
+
+@pytest.mark.parametrize("stem,expected", [
+    ("ISG-TL-001Taşeron ve Hizmet Sağlayıcıları İşletmeye Giriş Çıkış Talimatı-rev01", "ISG-TL-001"),  # kod başlığa bitişik
+    ("PR.YP-0X Yatırım ve Proje Prosedürü", "PR.YP-0X"),  # yer tutucu numara
+    ("PR.İSG-01 İSG Prosedürü-Rev00", "PR.İSG-01"),
+    ("PAD-2 MEKANİK BAKIM TALİMATI", "PAD-2"),
+    ("Orta Gerilim Açma Kapama Talimatı", None),
+])
+def test_filename_code_handles_glued_and_placeholder_codes(stem, expected):
+    from kys.ingest.metadata import filename_code
+    assert filename_code(stem) == expected

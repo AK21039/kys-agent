@@ -55,7 +55,7 @@ def test_pdf_text_and_repeated_header_lines(tmp_path):
 def test_legacy_doc_raises_with_conversion_hint(tmp_path):
     p = tmp_path / "eski.doc"
     p.write_bytes(b"x")
-    with pytest.raises(UnsupportedFormat, match="soffice"):
+    with pytest.raises(UnsupportedFormat, match="convert-legacy"):
         parse(p)
 
 

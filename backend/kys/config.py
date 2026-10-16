@@ -50,6 +50,8 @@ class Settings:
     access_token: str               # boşsa kimlik doğrulama yok (yalnızca yerel kullanım)
     db_url: str                     # konteyner açılışında DB yoksa buradan indirilir
     allowed_hosts: tuple[str, ...]  # MCP için Host başlığı beyaz listesi (boşsa kontrol yok)
+    pages_dir: Path | None = None   # önceden üretilmiş PDF sayfa PNG'leri: <pages_dir>/<dosya_sha256>/<n>.png
+    files_dir: Path | None = None   # orijinal dosyaların bulunabileceği ek klasör (dosya adıyla aranır)
 
 
 def _resolve(path: str) -> Path:
@@ -73,4 +75,6 @@ settings = Settings(
     access_token=os.getenv("KYS_ACCESS_TOKEN", ""),
     db_url=os.getenv("KYS_DB_URL", ""),
     allowed_hosts=tuple(h.strip() for h in os.getenv("KYS_ALLOWED_HOSTS", "").split(",") if h.strip()),
+    pages_dir=_resolve(os.environ["KYS_PAGES_DIR"]) if os.getenv("KYS_PAGES_DIR") else None,
+    files_dir=_resolve(os.environ["KYS_FILES_DIR"]) if os.getenv("KYS_FILES_DIR") else None,
 )

@@ -28,20 +28,20 @@ class ParsedDoc:
     warnings: list[str] = field(default_factory=list)
 
 
-def parse(path: Path | str) -> ParsedDoc:
+def parse(path: Path | str, ocr: bool = True) -> ParsedDoc:
     path = Path(path)
     ext = path.suffix.lower()
     if ext in LEGACY:
         raise UnsupportedFormat(
-            f"{ext} eski Office biçimi. LibreOffice ile dönüştürün: "
-            f"soffice --headless --convert-to {ext.lstrip('.')}x \"{path.name}\""
+            f"{ext} eski Office biçimi. Önce dönüştürün: kys convert-legacy \"{path.parent}\" "
+            f"(Word/Excel COM; çıktı data/converted/). Alternatif: LibreOffice (soffice --headless --convert-to {ext.lstrip('.')}x)"
         )
     if ext not in SUPPORTED:
         raise UnsupportedFormat(f"Desteklenmeyen dosya türü: {ext}")
     if ext == ".docx":
         doc = _parse_docx(path)
     elif ext == ".pdf":
-        doc = _parse_pdf(path)
+        doc = _parse_pdf(path, ocr)
     elif ext in (".xlsx", ".xlsm"):
         doc = _parse_xlsx(path)
     else:
@@ -160,17 +160,49 @@ def _dedupe(lines: list[str]) -> list[str]:
 
 # --- PDF ------------------------------------------------------------------
 
-def _parse_pdf(path: Path) -> ParsedDoc:
+def _image_ratio(page) -> float:
+    area = page.width * page.height
+    if not area:
+        return 0.0
+    cov = sum(max(0, min(im["x1"], page.width) - max(im["x0"], 0)) *
+              max(0, min(im["bottom"], page.height) - max(im["top"], 0)) for im in page.images)
+    return cov / area
+
+
+def _parse_pdf(path: Path, ocr: bool = True) -> ParsedDoc:
     import pdfplumber
+
+    from . import ocr as ocr_mod
 
     warnings: list[str] = []
     page_lines: list[list[str]] = []
+    ratios: list[float] = []
     with pdfplumber.open(str(path)) as pdf:
         n_pages = len(pdf.pages)
         for page in pdf.pages:
             # Sahte kalın yazı (aynı harfin üst üste iki kez çizilmesi) "DDöökk" üretir; tekrarları at.
             text = page.dedupe_chars().extract_text() or ""
             page_lines.append([ln.strip() for ln in text.splitlines() if ln.strip()])
+            ratios.append(_image_ratio(page))
+
+    todo = ocr_mod.pages_needing_ocr([sum(len(ln) for ln in lines) for lines in page_lines], ratios)
+    if todo and ocr:
+        res = None
+        try:
+            res = ocr_mod.ocr_pdf_pages(path, todo)
+        except Exception as e:  # OCR hiçbir zaman ayrıştırmayı düşürmemeli
+            warnings.append(f"OCR başarısız: {type(e).__name__}: {e}")
+        if res is None:
+            warnings.append("OCR motoru bulunamadı (pip install -e backend[ocr]); OCR atlandı.")
+        else:
+            done = sorted(res.pages)
+            for i in done:
+                page_lines[i].extend(ln for ln in res.pages[i].splitlines() if ln and ln not in page_lines[i])
+            if done:
+                warnings.append(f"OCR uygulandı ({res.engine}; sayfalar: {ocr_mod.page_ranges(done)}). "
+                                "OCR çıktısı hata içerebilir, kritik değerleri doğrulayın.")
+            if res.failed:
+                warnings.append(f"OCR başarısız sayfalar: {ocr_mod.page_ranges(res.failed)} ({'; '.join(res.notes)})")
 
     total_chars = sum(len(ln) for lines in page_lines for ln in lines)
     if n_pages and total_chars < 40 * n_pages:

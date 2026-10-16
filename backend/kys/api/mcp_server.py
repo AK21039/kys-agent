@@ -53,4 +53,10 @@ def build_server(db_path=None) -> MCPServer:
         with closing(conn()) as c:
             return catalog.stats(c)
 
+    @server.tool(description="Bir sürecin akışını getirir: adımlar (sorumlu, karar, sonraki adımlar, kaynak alıntı) ve "
+                             "Mermaid flowchart metni. Örnek kod: 'PR08-UR-3', 'PR46-PRJ-1'.")
+    def get_process_flow(code: str) -> dict:
+        with closing(conn()) as c:
+            return catalog.get_process_flow(c, code) or {"error": f"Süreç bulunamadı: {code}"}
+
     return server

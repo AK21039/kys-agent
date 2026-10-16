@@ -34,6 +34,9 @@ PowerShell (kullanıcı):
 ```powershell
 & "$env:LOCALAPPDATA\kys-agent\.venv\Scripts\kys.exe" ingest data\inbox --no-llm
 # diğer: docs | show KOD | search "..." | refs | uncoded | set-code ESKI YENI [--rev NN] | stats
+# OCR: ocr-check | reingest KOD [--apply]      eski Office: convert-legacy KLASÖR (Word/Excel COM)
+# akış: flow KOD | render KOD | flow-compare KOD DOSYA.vsdx | content-compare KLASÖR
+# çıkarım: extract-export | extract-check | extract-import      yayın: publish [--pages]
 ```
 Bash (geliştirme):
 ```bash
@@ -63,7 +66,9 @@ PY="$LOCALAPPDATA/kys-agent/.venv/Scripts/python.exe"
 7. **Türkçe arama:** aranabilir metin ve sorgular `textnorm.fold` ile katlanır (ı/İ/i, ş, ğ, ü, ö, ç).
 8. **Testlerde gerçek API çağrısı yok.** LLM mock'lanır. Gerçek şirket dokümanı fixture olarak commit edilmez;
    fixture'lar testte üretilir (`tests/conftest.py`: `make_docx`, `make_xlsx`).
-9. Şema değişikliği `schema.sql`'e yapılır ve `CREATE ... IF NOT EXISTS` ile idempotent kalır.
+9. **Yayımlanmış sürüm esastır.** Sistemde yayımlanan PDF, Word/Visio ham kaynaktan önce gelir; ham kaynak
+   eksik veya eski olabilir. Fark çıkarsa PDF doğru kabul edilir.
+10. Şema değişikliği `schema.sql`'e yapılır ve `CREATE ... IF NOT EXISTS` ile idempotent kalır.
    Kolon değişikliği gerekiyorsa `db.py`'deki `MIGRATIONS` listesine eklenir.
 
 ## Claude API kullanımı

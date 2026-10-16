@@ -47,6 +47,18 @@
   td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { color: var(--muted); font-weight: 600; }
   .hidden { display: none; }
+  main.wide { max-width: 1600px; }
+  .flow-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+  .flow-pane { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+               overflow: auto; max-height: 78vh; }
+  #flow-svg svg { max-width: none; height: auto; }
+  #flow-svg g.node { cursor: pointer; }
+  #flow-svg g.node.sel rect, #flow-svg g.node.sel polygon, #flow-svg g.node.sel path { stroke: var(--accent) !important; stroke-width: 3px !important; }
+  #page-img { max-width: 100%; display: block; border: 1px solid var(--line); background: #fff; }
+  .pager { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .pager button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 6px;
+                  padding: 4px 12px; cursor: pointer; font: inherit; }
+  @media (max-width: 900px) { .flow-grid { grid-template-columns: 1fr; } }
   @media (max-width: 600px) { form { flex-direction: column; } .hide-sm { display: none; } }
 </style>
 </head>
@@ -57,6 +69,7 @@
     <button data-tab="ask" class="on">Soru sor</button>
     <button data-tab="search">Ara</button>
     <button data-tab="docs">Dokümanlar</button>
+    <button data-tab="flow">Süreçler</button>
     <button data-tab="refs">Eksik atıflar</button>
   </nav>
 
@@ -80,6 +93,20 @@
     <div id="docs-out"></div>
   </section>
   <section id="tab-refs" class="hidden"><div id="refs-out"></div></section>
+  <section id="tab-flow" class="hidden">
+    <form id="flow-form"><select id="flow-sel"><option value="">Süreç seçin…</option></select></form>
+    <div id="flow-info"></div>
+    <div class="flow-grid" id="flow-grid">
+      <div class="flow-pane"><div id="flow-svg" class="meta">Yukarıdan bir süreç seçin. Bir adıma tıklayınca alıntısı ve kaynak sayfası açılır.</div></div>
+      <div class="flow-pane">
+        <div id="step-card"></div>
+        <div class="pager"><button id="pg-prev" type="button">&larr;</button><span id="pg-label" class="meta"></span>
+          <button id="pg-next" type="button">&rarr;</button></div>
+        <div id="page-msg" class="meta"></div>
+        <img id="page-img" alt="Orijinal doküman sayfası" class="hidden">
+      </div>
+    </div>
+  </section>
   <section id="tab-doc" class="hidden"><div id="doc-out"></div></section>
 </main>
 <script>
@@ -100,7 +127,9 @@ const ref = (d) => `<span class="ref" data-code="${esc(d.code)}">${esc(d.code)} 
 
 function show(tab) {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
-  ["ask", "search", "docs", "refs", "doc"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== tab));
+  ["ask", "search", "docs", "flow", "refs", "doc"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== tab));
+  document.querySelector("main").classList.toggle("wide", tab === "flow");
+  if (tab === "flow" && $("flow-sel").options.length < 2) loadProcessList();
   if (tab === "docs" && !$("docs-out").innerHTML) loadDocs();
   if (tab === "refs" && !$("refs-out").innerHTML) loadRefs();
 }
@@ -165,6 +194,78 @@ async function openDoc(code) {
     $("doc-out").innerHTML = h;
   } catch (err) { fail("doc-out", err); }
 }
+
+// ---- Süreçler: Mermaid akış şeması + orijinal PDF sayfası ----
+const MERMAID_URL = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js";
+let mermaidReady = null, cur = null, curPage = 1, imgUrl = null, flowSeq = 0;
+function loadMermaid() {
+  if (!mermaidReady) mermaidReady = new Promise((ok, no) => {
+    const sc = document.createElement("script"); sc.src = MERMAID_URL; sc.crossOrigin = "anonymous";
+    sc.onload = () => { const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+      mermaid.initialize({startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default", flowchart: {htmlLabels: true}}); ok(); };
+    sc.onerror = () => { mermaidReady = null; no(new Error("Mermaid kütüphanesi yüklenemedi (internet bağlantısı gerekir)")); };
+    document.head.appendChild(sc);
+  });
+  return mermaidReady;
+}
+async function loadProcessList() {
+  try {
+    const rows = await api("/processes");
+    $("flow-sel").innerHTML = '<option value="">Süreç seçin…</option>' + rows.map((p) =>
+      `<option value="${esc(p.code)}">${esc(p.code)} — ${esc(p.name)} (${p.step_count} adım)</option>`).join("");
+  } catch (err) { $("flow-info").innerHTML = `<div class="warn">${esc(err.message)}</div>`; }
+}
+$("flow-sel").onchange = () => { if ($("flow-sel").value) openProcess($("flow-sel").value); };
+
+async function openProcess(code) {
+  const my = ++flowSeq;
+  $("flow-svg").innerHTML = '<div class="meta">Yükleniyor…</div>'; $("step-card").innerHTML = "";
+  try {
+    const [p] = await Promise.all([api("/processes/" + encodeURIComponent(code)), loadMermaid()]);
+    if (my !== flowSeq) return;
+    cur = p; curPage = 1;
+    $("flow-info").innerHTML = `<div class="card"><b>${esc(p.code)}</b> — ${esc(p.name)}
+      <div class="meta">Kaynak: <span class="ref" data-code="${esc(p.document_code)}">${esc(p.document_code)} Rev.${esc(p.revision)}</span>
+      · ${p.steps.length} adım${p.page_count ? " · " + p.page_count + " sayfa" : ""}</div>
+      <div class="warn" style="margin-top:6px">Akış şeması dokümandan otomatik çıkarılmıştır; adımları ve okları sağdaki orijinal sayfayla karşılaştırarak doğrulayın.
+      İki çıkışlı karar adımlarında ilk çıkış "Evet", ikincisi "Hayır" varsayılır.</div></div>`;
+    const {svg, bindFunctions} = await mermaid.render("mm" + my, p.mermaid);
+    if (my !== flowSeq) return;
+    $("flow-svg").innerHTML = svg; bindFunctions?.($("flow-svg"));
+    $("flow-svg").querySelectorAll("g.node").forEach((g) => {
+      const m = /^flowchart-s(\d+)-/.exec(g.id); if (m) g.onclick = () => selectStep(+m[1]);
+    });
+    await showPage(p.steps.find((s) => s.page)?.page || 1);
+  } catch (err) { $("flow-svg").innerHTML = `<div class="warn">${esc(err.message)}</div>`; }
+}
+function selectStep(seq) {
+  const s = cur.steps.find((x) => x.seq === seq); if (!s) return;
+  $("flow-svg").querySelectorAll("g.node").forEach((g) => g.classList.toggle("sel", g.id.startsWith("flowchart-s" + seq + "-")));
+  const next = s.next_steps.map((n) => cur.steps.find((x) => x.seq === n)).filter(Boolean);
+  $("step-card").innerHTML = `<div class="card"><span class="pill">Adım ${s.seq}</span><b>${esc(s.name)}</b>
+    <div class="meta">${s.responsible ? "Sorumlu: " + esc(s.responsible) : "Sorumlu belirtilmemiş"}${s.approver ? " · Onaycı: " + esc(s.approver) : ""}${s.system ? " · Sistem: " + esc(s.system) : ""}</div>
+    ${s.decision ? `<div class="meta">Karar: ${esc(s.decision)}</div>` : ""}
+    ${next.length ? `<div class="meta">Sonraki: ${next.map((n) => esc(n.seq + ". " + n.name)).join(" · ")}</div>` : ""}
+    ${s.quote ? `<div class="quote">${esc(s.quote)}</div><div class="meta">${ref({code: cur.document_code, revision: cur.revision})}${s.page ? " · sayfa " + s.page : ""}</div>` : '<div class="meta">Bu adım için alıntı yok.</div>'}</div>`;
+  if (s.page) showPage(s.page);
+}
+async function showPage(n) {
+  const total = cur.page_count || 0;
+  if (!cur.is_pdf) { $("page-img").classList.add("hidden"); $("page-msg").textContent = "Kaynak PDF değil; sayfa görüntüsü yok."; return; }
+  if (total) n = Math.min(Math.max(n, 1), total);
+  curPage = n; $("pg-label").textContent = `Sayfa ${n}${total ? " / " + total : ""}`; $("page-msg").textContent = "Sayfa yükleniyor…";
+  try {
+    const r = await fetch(BASE + "/api/documents/" + encodeURIComponent(cur.document_code) + "/pages/" + n + ".png",
+                          {headers: token ? {Authorization: "Bearer " + token} : {}});
+    if (curPage !== n) return;
+    if (!r.ok) { $("page-img").classList.add("hidden");
+      $("page-msg").textContent = r.status === 404 ? "Bu sayfanın görüntüsü sunucuda yok (orijinal dosya yüklenmemiş)." : "Sayfa alınamadı: " + r.status; return; }
+    const url = URL.createObjectURL(await r.blob()); if (imgUrl) URL.revokeObjectURL(imgUrl); imgUrl = url;
+    $("page-img").src = url; $("page-img").classList.remove("hidden"); $("page-msg").textContent = "";
+  } catch (err) { $("page-msg").textContent = err.message; }
+}
+$("pg-prev").onclick = () => cur && showPage(curPage - 1);
+$("pg-next").onclick = () => cur && showPage(curPage + 1);
 
 async function init() {
   try {

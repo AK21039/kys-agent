@@ -6,6 +6,8 @@ Yollar KYS_BASE_PATH altındadır (varsayılan /qa → paktenops.com/qa):
     GET  /qa/api/health        durum (kimlik doğrulamasız)
     GET  /qa/api/stats | documents | documents/{code} | search?q= | references
     POST /qa/api/ask           {"question": "..."} → kaynaklı cevap (KYS_MODEL_QUERY)
+    GET  /qa/api/processes | processes/{kod}   süreç listesi / adımlar + Mermaid akış metni
+    GET  /qa/api/documents/{kod}/pages/{n}.png  PDF sayfası (1 tabanlı)
     *    /qa/mcp               MCP (Streamable HTTP) — herhangi bir yapay zekâ istemcisi bağlanabilir
 """
 
@@ -18,13 +20,14 @@ from importlib import resources
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 
 from .. import config, db
 from ..llm import LLMError
-from ..query import assistant, catalog
+from ..process import flow
+from ..query import assistant, catalog, pages
 from .mcp_server import build_server
 
 log = logging.getLogger("kys.api")
@@ -133,6 +136,27 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
         if not d:
             raise HTTPException(404, f"Doküman bulunamadı: {code}")
         return d
+
+    @app.get(f"{base}/api/documents/{{code}}/pages/{{name}}", dependencies=guarded)
+    def document_page(code: str, name: str, c: sqlite3.Connection = Depends(conn)):
+        stem, dot, ext = name.rpartition(".")
+        if ext.lower() != "png" or not stem.isdigit():
+            raise HTTPException(404, "Sayfa numarası geçersiz")
+        png = pages.page_image(c, code, int(stem))
+        if png is None:
+            raise HTTPException(404, "Sayfa görüntüsü yok (PDF değil veya orijinal dosya/önceden üretilmiş sayfa bulunamadı)")
+        return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=3600"})
+
+    @app.get(f"{base}/api/processes", dependencies=guarded)
+    def processes(c: sqlite3.Connection = Depends(conn)):
+        return [{k: v for k, v in p.items() if k != "file_path"} for p in flow.list_processes(c)]
+
+    @app.get(f"{base}/api/processes/{{code}}", dependencies=guarded)
+    def process(code: str, c: sqlite3.Connection = Depends(conn)):
+        p = catalog.get_process_flow(c, code)
+        if not p:
+            raise HTTPException(404, f"Süreç bulunamadı: {code}")
+        return p
 
     @app.get(f"{base}/api/search", dependencies=guarded)
     def search(q: str, limit: int = 20, c: sqlite3.Connection = Depends(conn)):
