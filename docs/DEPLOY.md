@@ -5,7 +5,7 @@
 ```
 Ofis PC (işleme, ara sıra açık)                Bulut (sorgu, 7/24, PC'den bağımsız)
 ┌───────────────────────────────┐   publish    ┌──────────────────────────────────────┐
-│ kys ingest / classify (Ollama)│ ───────────▶ │ Konteyner: ghcr.io/ak21039/kys-agent │
+│ kys ingest / classify (Ollama)│ ───────────▶ │ Cloud Run kys-qa (konteyner)         │
 │ kural çıkarımı (Faz 1)        │  kys-query.db│  /qa/        web sayfası             │
 │ SQLite (yazılabilir)          │              │  /qa/api/*   REST API                │
 └───────────────────────────────┘              │  /qa/mcp     MCP (her yapay zekâ)    │
@@ -19,6 +19,8 @@ Konteyner salt okunurdur, işlemci gerektirmez (arama SQLite'ta, cevap üretimi 
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
 | `KYS_DB_PATH` | `/data/kys.db` | Veritabanı dosyası (bağlanan disk) |
+| `KYS_PAGES_DIR` | — | Önceden üretilmiş sayfa PNG'leri (`kys publish --pages`) |
+| `KYS_PUBLISH_BUCKET` | — | (Ofis PC) `kys scheduled` sonunda yayın+yükleme hedefi `gs://...` |
 | `KYS_DB_URL` | — | Dosya yoksa açılışta buradan indirilir (R2/S3 imzalı bağlantı vb.) |
 | `KYS_ACCESS_TOKEN` | — | Doluysa `/api` ve `/mcp` için `Authorization: Bearer <anahtar>` gerekir |
 | `KYS_BASE_PATH` | `/qa` | Yol öneki → `paktenops.com/qa` |
@@ -50,27 +52,83 @@ yalnızca veriyi verir.
 - **claude.ai, ChatGPT web bağlayıcıları:** sabit anahtar yerine OAuth isterler. Yayında Cloudflare Access
   (OAuth) önüne konarak çözülecek.
 
-## Yayın akışı
+## Canlı kurulum (Google Cloud Run)
+
+| Kaynak | Değer |
+|---|---|
+| Proje | `gen-lang-client-0066123286` ("KYS Agent", no `268170449963`) |
+| Servis | `kys-qa`, bölge `europe-west1`, `--min-instances 0 --max-instances 1`, 512 Mi, 1 vCPU, gen2 |
+| Adres | `https://kys-qa-53duzoe3kq-ew.a.run.app/qa/` (API: `/qa/api/*`, MCP: `/qa/mcp`) |
+| Veri | Özel bucket `gs://kys-agent-qa-data-268170449963` (tek tip erişim, public erişim engelli): `kys.db`, `pages/` |
+| Bağlama | Bucket Cloud Run volume (gcsfuse) olarak **salt okunur** `/data`; `KYS_DB_PATH=/data/kys.db`, `KYS_PAGES_DIR=/data/pages`, `KYS_BASE_PATH=/qa` |
+| Servis hesabı | `kys-run@<proje>.iam.gserviceaccount.com`: yalnızca bucket `objectViewer` + iki secret `secretAccessor` |
+| Secret'lar | `kys-anthropic-api-key` → `ANTHROPIC_API_KEY`, `kys-access-token` → `KYS_ACCESS_TOKEN` |
+| İmaj | Artifact Registry `cloud-run-source-deploy` (Cloud Build ile `--source`); temizlik politikası yalnızca son sürümü tutar |
+| Erişim | `--allow-unauthenticated` (IAM açık); uygulama kendi `Authorization: Bearer` anahtarını zorlar (`/qa/api/health` ve `/qa/` hariç) |
+
+Erişim anahtarı yerelde `%LOCALAPPDATA%\kys-agent\access_token.txt` dosyasındadır (repoya girmez). Döndürmek için:
+yeni sürüm ekleyin (`gcloud secrets versions add kys-access-token --data-file=-`) ve yeni revizyon başlatın
+(`gcloud run services update kys-qa --region europe-west1 --update-env-vars KYS_DB_REV=...`).
+
+Sorgu servisi DB'yi `immutable=1` URI parametresiyle açar (`db.connect(..., immutable=True)`): gcsfuse üzerinde
+SQLite kilit/journal dosyası oluşturamaz; yayın kopyası zaten tek dosya ve değişmezdir. **Canlı (yazılan) DB'de
+`immutable` kullanılmaz** — yalnızca API/MCP bunu ister.
+
+### Kurulum / yeniden kurulum
+
+`infra/deploy-cloudrun.ps1.txt` tekrar çalıştırılabilir (API'ler, bucket, servis hesabı, roller, secret'lar,
+yükleme, imaj, servis, temizlik politikası). W: paylaşımı `.ps1` yazmaya izin vermediği için `.txt` uzantılıdır.
+Depo kökünden:
 
 ```powershell
-kys publish     # %LOCALAPPDATA%\kys-agent\publish\kys-query.db üretir (yerel yollar ve LLM logları çıkarılır)
+& ([scriptblock]::Create((Get-Content -Raw infra\deploy-cloudrun.ps1.txt)))            # tam kurulum
+& ([scriptblock]::Create((Get-Content -Raw infra\deploy-cloudrun.ps1.txt))) -SkipBuild  # imajı üretme, ayarı/veriyi güncelle
 ```
 
-Dosyayı konteynerin okuyacağı yere yükleyin (bağlı disk veya `KYS_DB_URL` ile erişilen gizli depolama) ve
-konteyneri yeniden başlatın.
+Secret'lar zaten varsa değerlerine dokunulmaz; yoksa Anthropic anahtarı yalnızca `.env`'deki `ANTHROPIC_API_KEY`
+satırından okunup stdin ile aktarılır, erişim anahtarı rastgele üretilir. Betik hiçbir sır içermez.
 
-## Barındırma seçenekleri (karar bekliyor)
+## Yayın akışı (veri güncelleme)
+
+```powershell
+kys publish --pages --upload gs://kys-agent-qa-data-268170449963
+```
+
+1. `kys-query.db` (LLM logları silinmiş, dosya yolları yalnızca ad) ve `pages/` PNG'leri üretilir
+   (`%LOCALAPPDATA%\kys-agent\publish\`).
+2. `gcloud storage cp` / `rsync` ile bucket'a yüklenir (`gcloud` PowerShell alt süreciyle çağrılır; cmd gerekmez,
+   ADC gerekmez — `gcloud auth login` oturumu yeter).
+3. `gcloud run services update kys-qa --update-env-vars KYS_DB_REV=<zaman>` ile **yeni revizyon** başlatılır.
+   Gerekçe: gcsfuse metadata önbelleği tuttuğu ve DB `immutable` açıldığı için çalışan örnek dosya değişince
+   eski/karışık içerik görebilir; yeni revizyon temiz bağlama ve tutarlı veri garantiler. Trafik otomatik geçer.
+   `--no-restart` ile atlanır (bu durumda servisi elle yenileyin).
+
+Zamanlanmış görev: `KYS_PUBLISH_BUCKET=gs://...` tanımlıysa `kys scheduled` yükle + sınıflandır sonrasında aynı
+yayın+yüklemeyi yapar. Hata olursa yalnızca zamanlı görev loguna yazılır, görev düşmez.
+`KYS_RUN_SERVICE` / `KYS_RUN_REGION` varsayılanları `kys-qa` / `europe-west1`.
+
+## Maliyet ve güvenlik notları
+
+- Sıfıra iner (`min-instances 0`), tek örnek (`max-instances 1`); boştayken işlemci ücreti yok. İlk istekte soğuk
+  başlangıç birkaç saniye. Ücretsiz kota (180 bin vCPU-sn, 2 milyon istek/ay) bu kullanımı rahatça karşılar.
+- Asıl değişken maliyet `/qa/api/ask` çağrılarındaki Haiku token'larıdır (Anthropic faturası, GCP'den ayrı).
+- Depolama ~46 MB (bucket) + tek imaj (~80 MB Artifact Registry, ilk 0,5 GB ücretsiz); Secret Manager 2 sır
+  (ilk 6 sürüm ücretsiz).
+- **Bütçe kesici** (`infra/billing-kill`): aylık 50 TL bütçe aşılınca projenin faturalandırmasını kapatır; Cloud Run
+  durur, veri silinmez. Yeniden açmak elle yapılır.
+- Anahtar yanlış ellere geçerse secret'ı döndürün; bucket hiçbir zaman public yapılmaz.
+
+## Diğer barındırma seçenekleri (referans)
 
 | Platform | Ücret | Not |
 |---|---|---|
-| Google Cloud Run | Ücretsiz kota (kart gerekli) | Boştayken sıfıra iner, ilk istekte birkaç sn bekleme. DB: Cloud Storage. |
 | Koyeb / Render | Ücretsiz küçük örnek | Render 15 dk boşta uyur. |
 | Hugging Face Spaces (Docker) | Ücretsiz CPU | 48 saat kullanılmazsa uyur; gizli Space yapılabilir. |
-| Cloudflare Containers | Workers Paid (5 $/ay) | Alan adıyla aynı yerde; en az parça. |
+| Cloudflare Containers | Workers Paid (5 $/ay) | Alan adıyla aynı yerde. |
 | Herhangi bir VPS | Değişken | `docker run -p 8080:8080 -v ./data:/data ghcr.io/ak21039/kys-agent` |
 
-`paktenops.com/qa` yolu, hangi platform seçilirse seçilsin Cloudflare'de bir yönlendirme kuralı (Worker route
-veya Origin Rule) ile konteynere bağlanır. Cloudflare Access ile e-posta tabanlı giriş eklenir.
+`paktenops.com/qa` yolu, Cloudflare'de bir yönlendirme kuralı (Worker route veya Origin Rule) ile Cloud Run adresine
+bağlanır (`KYS_ALLOWED_HOSTS=paktenops.com` ile MCP Host listesi). Cloudflare Access ile e-posta tabanlı giriş eklenir.
 
 ## Yerelde deneme
 

@@ -223,6 +223,15 @@ def cmd_scheduled(args) -> None:
             cmd_ingest(argparse.Namespace(path=str(settings.inbox_dir), no_llm=True, no_ocr=False))
             print()
             cmd_classify(argparse.Namespace(limit=args.limit, redo=False))
+            if settings.publish_bucket:  # hata görevi düşürmesin: yalnızca loga yazılır
+                print(f"\nYayın: {settings.publish_bucket}", flush=True)
+                try:
+                    cmd_publish(argparse.Namespace(out=None, pages="", upload=settings.publish_bucket,
+                                                   no_restart=False))
+                except Exception:
+                    import traceback
+                    print("Yayın/yükleme HATASI (görev devam ediyor):")
+                    traceback.print_exc()
         except Exception:
             import traceback
             traceback.print_exc()
@@ -251,6 +260,14 @@ def publish_snapshot(src_conn, out: Path) -> Path:
     return out
 
 
+def _publish_upload(out: Path, pdir: Path | None, bucket: str, restart: bool = True) -> None:
+    from . import cloudpublish
+    from .config import settings
+    cloudpublish.upload(out, pdir, bucket, service=settings.run_service, region=settings.run_region,
+                        restart=restart)
+    print(f"Yüklendi: {bucket}" + (f" · Cloud Run '{settings.run_service}' yeni revizyon başlattı" if restart else ""))
+
+
 def cmd_publish(args) -> None:
     from .config import LOCAL_HOME
     conn = _conn()
@@ -263,7 +280,12 @@ def cmd_publish(args) -> None:
         print(f"Sayfa görüntüleri: {docs} yeni PDF, {n} sayfa → {pdir}  (konteynerde KYS_PAGES_DIR ile bağlayın)")
     n = conn.execute("SELECT COUNT(*) FROM documents WHERE status = 'YURURLUKTE'").fetchone()[0]
     print(f"Yayın kopyası hazır: {out} ({out.stat().st_size / 1e6:.1f} MB, {n} yürürlükteki doküman)")
-    print("Sorgu servisine yükleyin (KYS_DB_PATH ile bağlayın veya KYS_DB_URL ile indirtin).")
+    if getattr(args, "upload", None):
+        pdir = (Path(args.pages) if args.pages else out.parent / "pages") if args.pages is not None else None
+        _publish_upload(out, pdir, args.upload, restart=not args.no_restart)
+    else:
+        print("Sorgu servisine yükleyin (KYS_DB_PATH ile bağlayın veya KYS_DB_URL ile indirtin) "
+              "ya da --upload gs://BUCKET kullanın.")
 
 
 def cmd_flow(args) -> None:
@@ -467,6 +489,9 @@ def main(argv=None) -> None:
     s.add_argument("--out", help="çıktı dosyası (varsayılan: %%LOCALAPPDATA%%\\kys-agent\\publish\\kys-query.db)")
     s.add_argument("--pages", nargs="?", const="", metavar="KLASÖR",
                    help="PDF sayfa görüntülerini de üret (varsayılan klasör: yayın dosyasının yanında pages/)")
+    s.add_argument("--upload", metavar="gs://BUCKET",
+                   help="üretimden sonra Cloud Storage'a yükle ve Cloud Run'da yeni revizyon başlat (gcloud gerekir)")
+    s.add_argument("--no-restart", action="store_true", help="--upload ile yeni revizyon başlatma")
     s.set_defaults(fn=cmd_publish)
     s = sub.add_parser("flow", help="sürecin Mermaid akış şemasını yaz")
     s.add_argument("code")

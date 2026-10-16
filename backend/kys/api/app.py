@@ -100,7 +100,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     def conn():
         if not db_path.exists():
             raise HTTPException(503, "Veritabanı henüz yüklenmedi")
-        with closing(db.connect(db_path, readonly=True)) as c:
+        with closing(db.connect(db_path, readonly=True, immutable=True)) as c:
             yield c
 
     def auth(request: Request):

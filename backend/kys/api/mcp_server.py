@@ -21,7 +21,7 @@ def build_server(db_path=None) -> MCPServer:
     server = MCPServer(name="kys", title="KYS Bilgi Tabanı", instructions=INSTRUCTIONS)
 
     def conn():
-        return db.connect(db_path or _boot_settings.db_path, readonly=True)
+        return db.connect(db_path or _boot_settings.db_path, readonly=True, immutable=True)
 
     @server.tool(description="KYS dokümanlarında tam metin arama. Türkçe karaktersiz yazılabilir. "
                              "Her sonuç doküman kodu, revizyon, madde numarası ve metin içerir.")

@@ -19,11 +19,13 @@ MIGRATIONS: list[tuple[int, str]] = [
 ]
 
 
-def connect(path: Path | str | None = None, readonly: bool = False) -> sqlite3.Connection:
+def connect(path: Path | str | None = None, readonly: bool = False, immutable: bool = False) -> sqlite3.Connection:
+    """`immutable=True`: dosya hiç değişmeyecek (yayın kopyası). SQLite kilit/journal dosyası aramaz; gcsfuse gibi
+    kilitlemeyi desteklemeyen salt okunur dosya sistemlerinde gerekir. Canlı (yazılan) DB'de KULLANMA."""
     path = Path(path or settings.db_path)
     if readonly:
         # İstek başına açılır; web sunucusu bağımlılığı ve uç noktayı farklı iş parçacıklarında çalıştırabilir.
-        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, check_same_thread=False)
+        conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro{'&immutable=1' if immutable else ''}", uri=True, check_same_thread=False)
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(path)

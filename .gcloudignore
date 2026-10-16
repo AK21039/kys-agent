@@ -1,0 +1,14 @@
+# Cloud Build'e yüklenecek kaynak: yalnızca Dockerfile'ın ihtiyacı olanlar. Sır ve şirket verisi ASLA gitmez.
+.git
+.github
+.claude
+.venv
+.env
+.env.*
+data
+docs
+infra
+**/__pycache__
+**/*.egg-info
+**/*.pyc
+backend/tests

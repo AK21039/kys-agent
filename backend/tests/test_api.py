@@ -120,3 +120,12 @@ def test_named_document_sections_come_first(published):
     assert rows[0]["code"] == "PR-08"
     rows = retrieve_for_question(c, "PR-04 dokümanında onay limitleri")
     assert rows[0]["code"] == "PR-04"
+
+
+def test_immutable_readonly_connection(published):
+    from kys import db
+    c = db.connect(published, readonly=True, immutable=True)
+    assert c.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+    with pytest.raises(Exception):
+        c.execute("DELETE FROM documents")
+    c.close()

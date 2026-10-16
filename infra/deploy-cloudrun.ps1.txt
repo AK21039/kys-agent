@@ -1,0 +1,102 @@
+<#
+ KYS sorgu servisini Google Cloud Run'a kurar / günceller. Tekrar çalıştırılabilir (idempotent). SIR İÇERMEZ.
+
+ NOT: W: paylaşımı .ps1 dosyası yazmaya izin vermediği için betik .ps1.txt uzantısıyla durur. Depo kökünden:
+   powershell -NoProfile -Command "& ([scriptblock]::Create((Get-Content -Raw infra\deploy-cloudrun.ps1.txt)))"
+ Parametre için: ... -Command "& ([scriptblock]::Create((Get-Content -Raw infra\deploy-cloudrun.ps1.txt))) -SkipBuild"
+ (veya dosyayı yerel diske .ps1 olarak kopyalayıp depo kökünden çalıştırın; $Root geçerli klasördür)
+
+ Ön koşul: `gcloud auth login` yapılmış, doğru proje seçili (gcloud config set project ...), fatura hesabı bağlı.
+ Yaptıkları: API'ler → özel bucket → servis hesabı + dar roller → secret'lar → yayın kopyası yükleme →
+ imaj (Cloud Build) → Cloud Run (gcsfuse salt okunur /data) → eski imajları silme politikası.
+ Secret değerleri ekrana/loga/argümana yazılmaz; stdin ile aktarılır. Yalnızca .env'deki ANTHROPIC_API_KEY okunur.
+ Bütçe kesici (infra/billing-kill) bu betiğin kapsamı dışındadır.
+#>
+param(
+  [string]$Region = "europe-west1",
+  [string]$Service = "kys-qa",
+  [switch]$SkipBuild,   # imajı yeniden üretme (yalnızca ayar/veri güncelle)
+  [switch]$SkipData     # kys publish çıktısını yükleme
+)
+$ErrorActionPreference = "Stop"
+$Root = (Get-Location).Path
+if (-not (Test-Path (Join-Path $Root "Dockerfile"))) { throw "Depo kökünden çalıştırın (Dockerfile bulunamadı)" }
+$Project = (gcloud config get-value project 2>$null).Trim()
+$ProjNo = (gcloud projects describe $Project --format="value(projectNumber)").Trim()
+$Bucket = "kys-agent-qa-data-$ProjNo"
+$SA = "kys-run@$Project.iam.gserviceaccount.com"
+$KysHome = Join-Path $env:LOCALAPPDATA "kys-agent"
+$Py = Join-Path $KysHome ".venv\Scripts\python.exe"
+$TokenFile = Join-Path $KysHome "access_token.txt"
+$Repo = "cloud-run-source-deploy"
+function Check($what) { if ($LASTEXITCODE -ne 0) { throw "$what başarısız (kod $LASTEXITCODE)" } }
+function Exists([scriptblock]$probe) { $ErrorActionPreference = "Continue"; & $probe *> $null; return ($LASTEXITCODE -eq 0) }
+
+Write-Host "Proje $Project ($ProjNo) · bölge $Region · bucket $Bucket"
+
+# 1) API'ler
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com storage.googleapis.com --quiet; Check "API"
+
+# 2) Özel bucket (tek tip erişim, public erişim engelli)
+if (-not (Exists { gcloud storage buckets describe "gs://$Bucket" })) {
+  gcloud storage buckets create "gs://$Bucket" --location=$Region --uniform-bucket-level-access --public-access-prevention --quiet; Check "bucket"
+}
+
+# 3) Servis hesabı ve yalnızca gereken roller
+if (-not (Exists { gcloud iam service-accounts describe $SA })) { gcloud iam service-accounts create kys-run --display-name "KYS sorgu servisi" --quiet; Check "servis hesabı" }
+gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --member="serviceAccount:$SA" --role=roles/storage.objectViewer --quiet | Out-Null; Check "bucket rolü"
+
+# 4) Secret'lar. Değer Python'dan gcloud'un stdin'ine BAYT olarak geçer (PowerShell borusu satır sonu eklerdi);
+#    ekrana/argümana/loga yazılmaz. Secret zaten varsa değerine dokunulmaz.
+$PutSecret = @'
+import re, secrets, subprocess, sys
+kind, name, envfile, tokenfile = sys.argv[1:5]
+if kind == "key":   # yalnızca ANTHROPIC_API_KEY satırı; .env'deki başka hiçbir değer kullanılmaz
+    m = re.search(r"^ANTHROPIC_API_KEY=(.+)$", open(envfile, encoding="utf-8").read(), re.M)
+    value = m.group(1).strip().strip("\"'")
+else:
+    value = secrets.token_urlsafe(32)
+    open(tokenfile, "w", encoding="ascii", newline="").write(value)   # kullanıcı buradan alır
+subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                f"& gcloud secrets versions add {name} --data-file=-; exit $LASTEXITCODE"],
+               input=value.encode(), check=True, capture_output=True)
+'@
+function Ensure-Secret($name, $kind) {
+  if (-not (Exists { gcloud secrets describe $name })) {
+    gcloud secrets create $name --replication-policy=user-managed --locations=$Region --quiet; Check "secret $name"
+    & $Py -I -c $PutSecret $kind $name (Join-Path $Root ".env") $TokenFile; Check "secret sürümü $name"
+  }
+  gcloud secrets add-iam-policy-binding $name --member="serviceAccount:$SA" --role=roles/secretmanager.secretAccessor --quiet | Out-Null; Check "secret rolü $name"
+}
+Ensure-Secret "kys-anthropic-api-key" "key"
+Ensure-Secret "kys-access-token" "token"
+
+# 5) Yayın kopyası (yeni revizyonu aşağıdaki deploy başlatır)
+if (-not $SkipData) {
+  & (Join-Path $KysHome ".venv\Scripts\kys.exe") publish --pages --upload "gs://$Bucket" --no-restart; Check "publish"
+}
+
+# 6) İmaj + servis
+$common = @(
+  "--region", $Region, "--service-account", $SA, "--allow-unauthenticated",
+  "--min-instances", "0", "--max-instances", "1", "--memory", "512Mi", "--cpu", "1",
+  "--execution-environment", "gen2",
+  "--add-volume", "name=data,type=cloud-storage,bucket=$Bucket,readonly=true",
+  "--add-volume-mount", "volume=data,mount-path=/data",
+  "--set-env-vars", "KYS_DB_PATH=/data/kys.db,KYS_PAGES_DIR=/data/pages,KYS_BASE_PATH=/qa",
+  "--set-secrets", "ANTHROPIC_API_KEY=kys-anthropic-api-key:latest,KYS_ACCESS_TOKEN=kys-access-token:latest",
+  "--quiet")
+if ($SkipBuild) {
+  gcloud run services update $Service @common; Check "run update"
+} else {
+  gcloud run deploy $Service --source $Root @common; Check "run deploy"
+}
+
+# 7) Artifact Registry'de yalnızca son imaj kalsın
+$policy = '[{"name":"son-surum","action":{"type":"Keep"},"mostRecentVersions":{"keepCount":1}},{"name":"gerisi","action":{"type":"Delete"},"condition":{"tagState":"any","olderThan":"1d"}}]'
+$pf = [System.IO.Path]::GetTempFileName(); Set-Content $pf $policy -Encoding ascii
+gcloud artifacts repositories set-cleanup-policies $Repo --location=$Region --policy=$pf --no-dry-run --quiet; Check "temizlik politikası"
+Remove-Item $pf
+
+$url = (gcloud run services describe $Service --region $Region --format="value(status.url)").Trim()
+Write-Host "Hazır: $url/qa/   (token: $TokenFile)"
