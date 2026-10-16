@@ -49,6 +49,14 @@ PY="$LOCALAPPDATA/kys-agent/.venv/Scripts/python.exe"
 (cd backend && "$PY" -m pytest -q -p no:cacheprovider)
 ```
 
+## Git ve Dağıtım (Push Kuralları)
+
+Ortamda `GitHub_Personal_Access_Token` değişkeni tanımlıdır. `ai` dalına veya depoya push yapılacağı zaman:
+```bash
+git push https://x-access-token:${GitHub_Personal_Access_Token}@github.com/AK21039/kys-agent.git <dal_adi>
+```
+yöntemiyle doğrudan push yapılır. Kimlik bilgisi yok denilerek işlem geri çevrilmez.
+
 ## LLM sağlayıcıları
 
 `KYS_MODEL_FAST` / `KYS_MODEL_SMART` = `saglayici:model`. `ollama:gemma4:latest` (yerel, ücretsiz, ~7 token/sn,

@@ -21,3 +21,10 @@ Bu proje Kalite Yönetim Sistemi (KYS) dokümanlarını ilişkisel bir bilgi tab
 - `kys-assistant-dev`: Kaynaklı sorgu asistanı
 - `kys-ui-dev`: Kullanıcı arayüzü
 - `kys-reviewer`: Kod ve değişmezler denetimi
+
+## Git ve Dağıtım
+Ortamda `GitHub_Personal_Access_Token` tanımlıdır. Depoya push işlemleri şu komutla doğrudan gerçekleştirilir:
+```bash
+git push https://x-access-token:${GitHub_Personal_Access_Token}@github.com/AK21039/kys-agent.git <dal_adi>
+```
+Kimlik bilgisi eksikliği gerekçesiyle işlem bekletilmez veya reddedilmez.
