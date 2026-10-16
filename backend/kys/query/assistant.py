@@ -32,14 +32,14 @@ def _source_label(r: sqlite3.Row) -> str:
     return f"{r['code']} Rev.{r['revision']}{clause} — {r['title']}"
 
 
-def ask(conn: sqlite3.Connection, question: str, limit: int = 8) -> dict:
+def ask(conn: sqlite3.Connection, question: str, limit: int = 8, byok: tuple[str, str] | None = None) -> dict:
     rows = retrieve_for_question(conn, question, limit=limit)
-    sources = [{"no": i + 1, "section_id": r["section_id"], "code": r["code"], "revision": r["revision"],
+    sources = [{"no": i + 1, "section_id": r["section_id"], "code": r["code"], "doc_code": r["code"], "revision": r["revision"],
                 "clause_no": r["clause_no"], "heading": r["heading"], "title": r["title"]}
                for i, r in enumerate(rows)]
     if not rows:
         return {"answer": "Bu soruyla ilgili yürürlükte bir doküman bölümü bulunamadı.", "yeterli_bilgi": False,
-                "citations": [], "unverified": 0, "sources": [], "model": str(llm.model_for("query"))}
+                "citations": [], "unverified": 0, "sources": [], "model": None}
 
     context = "\n\n".join(
         f'<kaynak no="{i + 1}" ref="{_source_label(r)}">\n{(r["heading"] or "")}\n{r["text"][:MAX_SOURCE_CHARS]}\n</kaynak>'
@@ -47,18 +47,28 @@ def ask(conn: sqlite3.Connection, question: str, limit: int = 8) -> dict:
     out = llm.structured(
         purpose="sorgu", tier="query", system=SYSTEM,
         user=f"<kaynaklar>\n{context}\n</kaynaklar>\n\n<soru>{question}</soru>",
-        schema=AnswerOut, max_tokens=4000,
+        schema=AnswerOut, max_tokens=4000, byok=byok,
     )
+    model = llm.last_model.get() or str(llm.model_for("query"))
 
     citations, unverified = [], 0
     for c in out.citations:
-        if not 1 <= c.kaynak_no <= len(rows):
-            unverified += 1
-            continue
-        r = rows[c.kaynak_no - 1]
-        if verify_quote(c.quote, f"{r['heading'] or ''}\n{r['text']}"):
-            citations.append({**sources[c.kaynak_no - 1], "quote": c.quote})
-        else:
+        idx = _verified_source(c, rows)
+        if idx is None:
             unverified += 1  # kaynakta geçmeyen alıntı kanıt sayılmaz (CLAUDE.md değişmez 1)
+            continue
+        # Kod/revizyon/madde modelden değil, alıntının doğrulandığı bölümden (section → document) gelir.
+        src = sources[idx]
+        citations.append({**src, "doc_code": src["code"], "quote": c.quote})
     return {"answer": out.answer, "yeterli_bilgi": out.yeterli_bilgi, "citations": citations,
-            "unverified": unverified, "sources": sources, "model": str(llm.model_for("query"))}
+            "unverified": unverified, "sources": sources, "model": model}
+
+
+def _verified_source(c: Citation, rows: list[sqlite3.Row]) -> int | None:
+    """Alıntının gerçekten geçtiği kaynağın indeksi. Önce modelin söylediği kaynak, o tutmazsa diğerleri."""
+    first = c.kaynak_no - 1
+    order = ([first] if 0 <= first < len(rows) else []) + [i for i in range(len(rows)) if i != first]
+    for i in order:
+        if verify_quote(c.quote, f"{rows[i]['heading'] or ''}\n{rows[i]['text']}"):
+            return i
+    return None

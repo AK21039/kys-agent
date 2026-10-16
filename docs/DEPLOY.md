@@ -25,17 +25,37 @@ Konteyner salt okunurdur, işlemci gerektirmez (arama SQLite'ta, cevap üretimi 
 | `KYS_ACCESS_TOKEN` | — | Doluysa `/api` ve `/mcp` için `Authorization: Bearer <anahtar>` gerekir |
 | `KYS_BASE_PATH` | `/qa` | Yol öneki → `paktenops.com/qa` |
 | `KYS_ALLOWED_HOSTS` | — | MCP için Host beyaz listesi, ör. `paktenops.com` |
-| `KYS_MODEL_QUERY` | `anthropic:claude-haiku-5-5` | Web asistanının modeli (aşağıya bakın) |
+| `KYS_MODEL_QUERY` | `gemini:gemini-3.6-flash,gemini:gemini-3.1-flash-lite,anthropic:claude-haiku-5-5` | Web asistanının model zinciri; virgülle ayrılır, sırayla denenir (aşağıya bakın) |
+| `GEMINI_API_KEY` | — | `gemini:` sağlayıcısı için (Cloud Run'da Secret Manager: `kys-gemini-api-key`) |
+| `KYS_CORS_ORIGINS` | — | Tarayıcıdan çağıran istemci adresleri (virgüllü); boşsa CORS kapalı |
+| `KYS_REMOTE_TIMEOUT` | `90` | gemini/openai istek zaman aşımı (sn) |
 | `ANTHROPIC_API_KEY` | — | `anthropic:` sağlayıcısı için |
 | `KYS_OPENAI_BASE_URL`, `KYS_OPENAI_API_KEY` | — | `openai:` sağlayıcısı için (OpenAI uyumlu herhangi bir uç nokta) |
 | `PORT` | `8080` | Platform belirler (Cloud Run vb.) |
+
+### Model zinciri, BYOK ve CORS
+
+- `KYS_MODEL_QUERY` virgüllü listedir. 429/5xx/zaman aşımı/anahtar yok gibi hatalarda sıradaki model denenir
+  (400/401/403 de sıradakine geçer, loglanır). Hepsi düşerse `POST /api/ask` **503** ve
+  `{"detail": "...", "code": "MODEL_YOK"}` döner; web arayüzü kullanıcıdan kendi anahtarını ister.
+- BYOK: istemci `X-LLM-Provider: gemini|anthropic` ve `X-LLM-Key: <anahtar>` başlıklarını gönderirse zincirin yalnızca
+  o sağlayıcıya ait modelleri o anahtarla denenir. Anahtar loglanmaz/saklanmaz; web arayüzünde yalnızca sessionStorage'dadır.
+- Cevaptaki `model` alanı cevabı üreten modeli gösterir. Alıntılardaki `doc_code`/`revision`/`clause_no` modelden değil,
+  alıntının doğrulandığı bölümden gelir.
+- `KYS_CORS_ORIGINS=https://istemci.example,https://baska.example`: izin verilen başlıklar Authorization, Content-Type,
+  X-LLM-Provider, X-LLM-Key; çerez/credentials kapalı.
+- Cloud Run:
+
+```bash
+gcloud run services update kys-qa --region europe-west1   --update-secrets GEMINI_API_KEY=kys-gemini-api-key:latest   --update-env-vars "^@^KYS_MODEL_QUERY=gemini:gemini-3.6-flash,gemini:gemini-3.1-flash-lite,anthropic:claude-haiku-5-5@KYS_CORS_ORIGINS=https://istemci.example"
+```
 
 ### Modeli değiştirmek (Claude'a bağımlı değil)
 
 ```bash
 KYS_MODEL_QUERY=anthropic:claude-haiku-5-5                       # şu an
 KYS_MODEL_QUERY=openai:glm-4.5-flash                             # + KYS_OPENAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
-KYS_MODEL_QUERY=openai:gemini-2.5-flash                          # + https://generativelanguage.googleapis.com/v1beta/openai
+KYS_MODEL_QUERY=gemini:gemini-3.6-flash                          # + GEMINI_API_KEY (yerleşik Gemini sağlayıcısı)
 KYS_MODEL_QUERY=openai:@cf/meta/llama-3.3-70b-instruct-fp8-fast  # + https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1
 KYS_MODEL_QUERY=ollama:gemma4:latest                             # + OLLAMA_URL (Ollama erişilebilir bir makinedeyse)
 ```

@@ -14,6 +14,8 @@ from kys.query.retrieval import _terms
 
 from .conftest import make_docx
 
+SECRET = "SIR-ANAHTAR-123"
+
 
 @pytest.fixture
 def published(conn, tmp_path):
@@ -129,3 +131,62 @@ def test_immutable_readonly_connection(published):
     with pytest.raises(Exception):
         c.execute("DELETE FROM documents")
     c.close()
+
+
+# --- Kaynak doküman kodu, BYOK, MODEL_YOK, CORS ----------------------------------
+
+def test_citation_doc_code_comes_from_verified_section_not_model(published, monkeypatch):
+    def fake_structured(**kwargs):
+        # Model yanlış kaynak numarası veriyor; alıntı aslında PR-04 md.4.2'de geçiyor.
+        return AnswerOut(answer="Genel Müdür onaylar [2].", yeterli_bilgi=True, citations=[
+            Citation(kaynak_no=2, quote="Satınalma talebi 100.000 TL'yi aşarsa Genel Müdür onaylar")])
+    monkeypatch.setattr(assistant.llm, "structured", fake_structured)
+    with _client(monkeypatch, published) as c:
+        a = c.post("/qa/api/ask", json={"question": "Satınalma onay limiti nedir? PR-04"}).json()
+    cit = a["citations"][0]
+    assert cit["doc_code"] == "PR-04" and cit["code"] == "PR-04" and cit["clause_no"] == "4.2"
+    assert cit["revision"] and all(s["doc_code"] for s in a["sources"])
+
+
+def test_ask_reports_answering_model_and_passes_byok(published, monkeypatch):
+    seen = {}
+
+    def fake_structured(**kwargs):
+        seen["byok"] = kwargs.get("byok")
+        llm.last_model.set("gemini:m2")
+        return AnswerOut(answer="x", yeterli_bilgi=True, citations=[])
+    monkeypatch.setattr(assistant.llm, "structured", fake_structured)
+    with _client(monkeypatch, published) as c:
+        q = {"question": "Satınalma onay limiti nedir?"}
+        assert c.post("/qa/api/ask", json=q).json()["model"] == "gemini:m2" and seen["byok"] is None
+        c.post("/qa/api/ask", json=q, headers={"X-LLM-Provider": "Gemini", "X-LLM-Key": " abc "})
+        assert seen["byok"] == ("gemini", "abc")
+        r = c.post("/qa/api/ask", json=q, headers={"X-LLM-Provider": "openai", "X-LLM-Key": "abc"})
+        assert r.status_code == 400 and "abc" not in r.text
+        assert c.post("/qa/api/ask", json=q, headers={"X-LLM-Key": "abc"}).status_code == 400
+
+
+def test_ask_chain_exhausted_returns_503_model_yok_without_key(published, monkeypatch, caplog):
+    def exhausted(**kwargs):
+        raise llm.LLMUnavailable(f"sorgu: hiçbir model cevap veremedi (gemini:m1 → HTTP 429 {SECRET})")
+    monkeypatch.setattr(assistant.llm, "structured", exhausted)
+    with _client(monkeypatch, published) as c, caplog.at_level("DEBUG"):
+        r = c.post("/qa/api/ask", json={"question": "Satınalma onay limiti nedir?"},
+                   headers={"X-LLM-Provider": "gemini", "X-LLM-Key": SECRET})
+    assert r.status_code == 503 and r.json()["code"] == "MODEL_YOK"
+    assert SECRET not in r.text and SECRET not in caplog.text
+
+
+def test_cors_disabled_by_default_and_enabled_by_origin_list(published, monkeypatch):
+    pre = {"Origin": "https://app.example", "Access-Control-Request-Method": "POST",
+           "Access-Control-Request-Headers": "authorization,content-type,x-llm-provider,x-llm-key"}
+    with _client(monkeypatch, published) as c:
+        assert "access-control-allow-origin" not in c.options("/qa/api/ask", headers=pre).headers
+    with _client(monkeypatch, published, cors_origins=("https://app.example",)) as c:
+        r = c.options("/qa/api/ask", headers=pre)
+        assert r.headers["access-control-allow-origin"] == "https://app.example"
+        assert "x-llm-key" in r.headers["access-control-allow-headers"].lower()
+        assert "access-control-allow-credentials" not in r.headers
+        bad = c.options("/qa/api/ask", headers={**pre, "Origin": "https://kotu.example"})
+        assert "access-control-allow-origin" not in bad.headers
+        assert c.get("/qa/api/health", headers={"Origin": "https://kotu.example"}).status_code == 200

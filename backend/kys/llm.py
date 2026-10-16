@@ -3,15 +3,19 @@
 Sağlayıcı katman bazında seçilir (config: KYS_MODEL_FAST / KYS_MODEL_SMART / KYS_MODEL_QUERY):
 - anthropic: Claude, Anthropic SDK ile (yapılandırılmış çıktı + prompt önbelleği)
 - ollama: yerel model, Ollama /api/chat ile (JSON şema kısıtlı çıktı); ücretsiz, veri makineden çıkmaz
-- openai: OpenAI uyumlu herhangi bir uç nokta (KYS_OPENAI_BASE_URL); GLM, Gemini, Workers AI, OpenRouter...
+- openai: OpenAI uyumlu herhangi bir uç nokta (KYS_OPENAI_BASE_URL); GLM, Workers AI, OpenRouter...
+- gemini: Google'ın OpenAI uyumlu uç noktası (GEMINI_API_KEY)
+Sorgu katmanı (KYS_MODEL_QUERY) virgüllü model zinciridir; hata/kota durumunda sıradaki denenir.
 Durma nedeni kontrolü ve `llm_calls` loglaması her iki sağlayıcı için burada yapılır.
 """
 
 import copy
+import logging
 import json
 import sqlite3
 import urllib.error
 import urllib.request
+from contextvars import ContextVar
 from functools import lru_cache
 from types import SimpleNamespace
 from typing import Literal, TypeVar
@@ -19,8 +23,9 @@ from typing import Literal, TypeVar
 import anthropic
 from pydantic import BaseModel, ValidationError
 
-from .config import ModelSpec, settings
+from .config import GEMINI_BASE_URL, ModelSpec, settings
 
+log = logging.getLogger("kys.llm")
 T = TypeVar("T", bound=BaseModel)
 Tier = Literal["fast", "smart", "query"]
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
@@ -36,8 +41,16 @@ def client() -> anthropic.Anthropic:
     return anthropic.Anthropic()
 
 
+def chain_for(tier: Tier) -> tuple[ModelSpec, ...]:
+    """Katmanın model zinciri. fast/smart tek modeldir; query virgülle ayrılmış liste olabilir."""
+    if tier == "query":
+        return tuple(settings.model_query)
+    return ({"fast": settings.model_fast, "smart": settings.model_smart}[tier],)
+
+
 def model_for(tier: Tier) -> ModelSpec:
-    return {"fast": settings.model_fast, "smart": settings.model_smart, "query": settings.model_query}[tier]
+    """Zincirin ilk (birincil) modeli."""
+    return chain_for(tier)[0]
 
 
 def _log(conn: sqlite3.Connection | None, *, purpose: str, model: str, usage=None,
@@ -56,6 +69,25 @@ def _log(conn: sqlite3.Connection | None, *, purpose: str, model: str, usage=Non
     conn.commit()
 
 
+class LLMUnavailable(LLMError):
+    """Zincirdeki hiçbir model cevap veremedi (kota, kesinti, anahtar yok...)."""
+
+    def __init__(self, msg: str, attempts: list[tuple[str, str]] | None = None):
+        super().__init__(msg)
+        self.attempts = attempts or []
+
+
+# Son başarılı çağrıyı yapan model (aynı bağlamda okunur); API cevabındaki `model` alanı için.
+last_model: ContextVar[str | None] = ContextVar("kys_llm_last_model", default=None)
+
+
+def _redact(text: str, *secrets: str | None) -> str:
+    for sec in secrets:
+        if sec:
+            text = text.replace(sec, "***")
+    return text
+
+
 def structured(
     *,
     purpose: str,
@@ -67,32 +99,57 @@ def structured(
     effort: Effort | None = None,
     conn: sqlite3.Connection | None = None,
     ref: str | None = None,
+    byok: tuple[str, str] | None = None,
 ) -> T:
-    """Şemaya uygun, doğrulanmış bir Pydantic nesnesi döndürür; aksi halde LLMError."""
-    spec = model_for(tier)
-    call = {"ollama": _ollama, "openai": _openai}.get(spec.provider, _anthropic)
-    try:
-        out, usage, stop = call(spec.model, system, user, schema, max_tokens, effort)
-    except LLMError as e:
-        _log(conn, purpose=purpose, model=str(spec), usage=getattr(e, "usage", None),
-             stop_reason=getattr(e, "stop", None), ok=False, error=str(e), ref=ref)
-        raise LLMError(f"{purpose}: {e}") from e
-    _log(conn, purpose=purpose, model=str(spec), usage=usage, stop_reason=stop, ok=True, ref=ref)
-    return out
+    """Şemaya uygun, doğrulanmış bir Pydantic nesnesi döndürür.
+
+    Katman zincirindeki modelleri sırayla dener; her denemeyi `llm_calls`'a ayrı satır olarak yazar.
+    Hiçbiri başarılmazsa `LLMUnavailable` (LLMError alt sınıfı). `byok=(sağlayıcı, anahtar)` verilirse zincir
+    yalnızca o sağlayıcının modellerine daraltılır ve çağrı kullanıcının anahtarıyla yapılır; anahtar loglanmaz.
+    """
+    chain = chain_for(tier)
+    api_key = None
+    if byok:
+        provider, api_key = byok
+        chain = tuple(m for m in chain if m.provider == provider)
+        if not chain:
+            raise LLMUnavailable(f"{purpose}: zincirde '{provider}' sağlayıcısına ait model yok")
+    attempts: list[tuple[str, str]] = []
+    for spec in chain:
+        call = {"ollama": _ollama, "openai": _openai, "gemini": _gemini}.get(spec.provider, _anthropic)
+        kwargs = {"api_key": api_key} if api_key and spec.provider in ("gemini", "anthropic") else {}
+        try:
+            out, usage, stop = call(spec.model, system, user, schema, max_tokens, effort, **kwargs)
+        except LLMError as e:
+            msg = _redact(str(e), api_key, settings.gemini_api_key, settings.openai_api_key)
+            status = getattr(e, "status", None)
+            kind = "kalıcı hata" if status in (400, 401, 403) else "geçici/diğer hata"
+            log.warning("%s: %s düştü (%s%s): %s", purpose, spec, kind, f" HTTP {status}" if status else "", msg)
+            _log(conn, purpose=purpose, model=str(spec), usage=getattr(e, "usage", None),
+                 stop_reason=getattr(e, "stop", None), ok=False, error=msg, ref=ref)
+            attempts.append((str(spec), msg))
+            continue
+        _log(conn, purpose=purpose, model=str(spec), usage=usage, stop_reason=stop, ok=True, ref=ref)
+        last_model.set(str(spec))
+        return out
+    summary = "; ".join(f"{m} → {err}" for m, err in attempts)
+    raise LLMUnavailable(f"{purpose}: hiçbir model cevap veremedi ({summary})", attempts)
 
 
-def _fail(msg: str, usage=None, stop: str | None = None) -> LLMError:
+def _fail(msg: str, usage=None, stop: str | None = None, status: int | None = None) -> LLMError:
     e = LLMError(msg)
-    e.usage, e.stop = usage, stop
+    e.usage, e.stop, e.status = usage, stop, status
     return e
 
 
 # --- Anthropic ------------------------------------------------------------
 
-def _anthropic(model: str, system: str, user: str, schema: type[T], max_tokens: int, effort):
+def _anthropic(model: str, system: str, user: str, schema: type[T], max_tokens: int, effort,
+               api_key: str | None = None):
     kwargs = {"output_config": {"effort": effort}} if effort else {}
     try:
-        resp = client().messages.parse(
+        cl = anthropic.Anthropic(api_key=api_key) if api_key else client()
+        resp = cl.messages.parse(
             model=model,
             max_tokens=max_tokens,
             # Sistem promptu sabit tutulur ve önbelleklenir; değişken içerik `user` içinde gider.
@@ -102,7 +159,9 @@ def _anthropic(model: str, system: str, user: str, schema: type[T], max_tokens: 
             **kwargs,
         )
     except anthropic.APIError as e:
-        raise _fail(f"API hatası: {type(e).__name__}: {e}") from e
+        raise _fail(f"API hatası: {type(e).__name__}: {e}", status=getattr(e, "status_code", None)) from e
+    except (TypeError, ValueError) as e:  # anahtar/kimlik bilgisi tanımsız
+        raise _fail(f"Anthropic kimlik bilgisi tanımsız veya geçersiz: {e}") from e
 
     if resp.stop_reason in ("refusal", "max_tokens") or resp.parsed_output is None:
         detail = resp.stop_reason
@@ -132,7 +191,7 @@ def _inline_refs(schema: dict) -> dict:
     return walk(schema)
 
 
-def _ollama(model: str, system: str, user: str, schema: type[T], max_tokens: int, effort):
+def _ollama(model: str, system: str, user: str, schema: type[T], max_tokens: int, effort, api_key=None):
     body = {
         "model": model,
         "stream": False,
@@ -147,7 +206,7 @@ def _ollama(model: str, system: str, user: str, schema: type[T], max_tokens: int
         with urllib.request.urlopen(req, timeout=settings.ollama_timeout) as r:
             data = json.load(r)
     except urllib.error.HTTPError as e:
-        raise _fail(f"Ollama HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}") from e
+        raise _fail(f"Ollama HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}", status=e.code) from e
     except (urllib.error.URLError, TimeoutError) as e:
         raise _fail(f"Ollama'ya ulaşılamadı ({settings.ollama_url}): {e}") from e
 
@@ -163,18 +222,30 @@ def _ollama(model: str, system: str, user: str, schema: type[T], max_tokens: int
 
 # --- OpenAI uyumlu uç noktalar ----------------------------------------------
 
-def _post_json(url: str, body: dict, headers: dict) -> dict:
+def _post_json(url: str, body: dict, headers: dict, timeout: int | None = None) -> dict:
     req = urllib.request.Request(url, json.dumps(body).encode("utf-8"),
                                  {"Content-Type": "application/json", **headers})
-    with urllib.request.urlopen(req, timeout=settings.ollama_timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout or settings.ollama_timeout) as r:
         return json.load(r)
 
 
-def _openai(model: str, system: str, user: str, schema: type[T], max_tokens: int, effort):
-    if not settings.openai_base_url:
+def _gemini(model: str, system: str, user: str, schema: type[T], max_tokens: int, effort,
+            api_key: str | None = None):
+    key = api_key or settings.gemini_api_key
+    if not key:
+        raise _fail("GEMINI_API_KEY tanımlı değil")
+    return _openai(model, system, user, schema, max_tokens, effort, key, base_url=GEMINI_BASE_URL,
+                   timeout=settings.remote_timeout)
+
+
+def _openai(model: str, system: str, user: str, schema: type[T], max_tokens: int, effort,
+            api_key: str | None = None, *, base_url: str | None = None, timeout: int | None = None):
+    base_url = base_url or settings.openai_base_url
+    if not base_url:
         raise _fail("KYS_OPENAI_BASE_URL tanımlı değil")
-    url = f"{settings.openai_base_url}/chat/completions"
-    headers = {"Authorization": f"Bearer {settings.openai_api_key}"} if settings.openai_api_key else {}
+    key = api_key or settings.openai_api_key
+    url = f"{base_url}/chat/completions"
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
     json_schema = _inline_refs(schema.model_json_schema())
     body = {
         "model": model,
@@ -186,7 +257,7 @@ def _openai(model: str, system: str, user: str, schema: type[T], max_tokens: int
     }
     try:
         try:
-            data = _post_json(url, body, headers)
+            data = _post_json(url, body, headers, timeout)
         except urllib.error.HTTPError as e:
             if e.code != 400:
                 raise
@@ -195,11 +266,11 @@ def _openai(model: str, system: str, user: str, schema: type[T], max_tokens: int
             body["messages"][0]["content"] = (
                 f"{system}\n\nYalnızca şu JSON şemasına uyan tek bir JSON nesnesi döndür:\n"
                 f"{json.dumps(json_schema, ensure_ascii=False)}")
-            data = _post_json(url, body, headers)
+            data = _post_json(url, body, headers, timeout)
     except urllib.error.HTTPError as e:
-        raise _fail(f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}") from e
+        raise _fail(f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}", status=e.code) from e
     except (urllib.error.URLError, TimeoutError) as e:
-        raise _fail(f"uç noktaya ulaşılamadı ({settings.openai_base_url}): {e}") from e
+        raise _fail(f"uç noktaya ulaşılamadı ({base_url}): {e}") from e
 
     u = data.get("usage") or {}
     usage = SimpleNamespace(input_tokens=u.get("prompt_tokens"), output_tokens=u.get("completion_tokens"))

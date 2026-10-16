@@ -5,7 +5,9 @@ Yollar KYS_BASE_PATH altındadır (varsayılan /qa → paktenops.com/qa):
     GET  /qa/                  web sayfası
     GET  /qa/api/health        durum (kimlik doğrulamasız)
     GET  /qa/api/stats | documents | documents/{code} | search?q= | references
-    POST /qa/api/ask           {"question": "..."} → kaynaklı cevap (KYS_MODEL_QUERY)
+    POST /qa/api/ask           {"question": "..."} → kaynaklı cevap (KYS_MODEL_QUERY model zinciri; cevapta `model`)
+                               İsteğe bağlı BYOK başlıkları: X-LLM-Provider (gemini|anthropic) + X-LLM-Key.
+                               Zincir tükenirse 503 {"detail": ..., "code": "MODEL_YOK"}
     GET  /qa/api/processes | processes/{kod}   süreç listesi / adımlar + Mermaid akış metni
     GET  /qa/api/documents/{kod}/pages/{n}.png  PDF sayfası (1 tabanlı)
     *    /qa/mcp               MCP (Streamable HTTP) — herhangi bir yapay zekâ istemcisi bağlanabilir
@@ -19,13 +21,14 @@ from contextlib import asynccontextmanager, closing
 from importlib import resources
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 
 from .. import config, db
-from ..llm import LLMError
+from ..llm import LLMError, LLMUnavailable
 from ..process import flow
 from ..query import assistant, catalog, pages
 from .mcp_server import build_server
@@ -109,6 +112,11 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
 
     guarded = [Depends(auth)]
 
+    if s.cors_origins:  # boşsa CORS kapalı; kimlik bilgisi (çerez) yok, jeton başlıkla gelir
+        app.add_middleware(CORSMiddleware, allow_origins=list(s.cors_origins), allow_credentials=False,
+                           allow_methods=["GET", "POST", "OPTIONS"],
+                           allow_headers=["Authorization", "Content-Type", "X-LLM-Provider", "X-LLM-Key"])
+
     if base:
         @app.get(base, include_in_schema=False)
         def to_index():
@@ -120,7 +128,7 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
 
     @app.get(f"{base}/api/health")
     def health():
-        return {"ok": db_path.exists(), "auth": bool(token), "model": str(s.model_query)}
+        return {"ok": db_path.exists(), "auth": bool(token), "model": ",".join(str(m) for m in s.model_query)}
 
     @app.get(f"{base}/api/stats", dependencies=guarded)
     def stats(c: sqlite3.Connection = Depends(conn)):
@@ -167,11 +175,25 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
         return catalog.unresolved_references(c)
 
     @app.post(f"{base}/api/ask", dependencies=guarded)
-    def ask(body: AskIn, c: sqlite3.Connection = Depends(conn)):
+    def ask(body: AskIn, c: sqlite3.Connection = Depends(conn),
+            provider: str | None = Header(None, alias="X-LLM-Provider"),
+            key: str | None = Header(None, alias="X-LLM-Key")):
         if not body.question.strip():
             raise HTTPException(400, "Soru boş")
+        byok = None
+        if provider or key:
+            provider = (provider or "").strip().lower()
+            if provider not in config.BYOK_PROVIDERS or not (key or "").strip():
+                raise HTTPException(400, "X-LLM-Provider (" + "|".join(config.BYOK_PROVIDERS) + ") ve X-LLM-Key birlikte verilmeli")
+            byok = (provider, key.strip())
         try:
-            return assistant.ask(c, body.question[:2000])
+            return assistant.ask(c, body.question[:2000], byok=byok)
+        except LLMUnavailable as e:
+            # Hata metni anahtarı içermez (llm.structured maskeler); yine de BYOK anahtarı ayrıca temizlenir.
+            detail = str(e).replace(byok[1], "***") if byok else str(e)
+            log.warning("Model zinciri tükendi: %s", detail)
+            return JSONResponse(status_code=503, content={
+                "detail": "Model şu an kullanılamıyor: " + detail, "code": "MODEL_YOK"})
         except LLMError as e:
             raise HTTPException(502, f"Model cevap veremedi: {e}") from e
 

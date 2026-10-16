@@ -137,7 +137,7 @@ def test_ollama_unreachable_raises(monkeypatch):
 
 def _use_openai(monkeypatch):
     monkeypatch.setattr(llm, "settings", dataclasses.replace(
-        llm.settings, model_query=ModelSpec.parse("openai:glm-4.5-flash"),
+        llm.settings, model_query=(ModelSpec.parse("openai:glm-4.5-flash"),),
         openai_base_url="https://ornek.ai/v1", openai_api_key="k"))
 
 
@@ -175,3 +175,111 @@ def test_openai_compatible_falls_back_to_json_mode(monkeypatch):
     monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
     assert llm.structured(purpose="s", tier="query", system="S", user="U", schema=Out).value == "ok"
     assert calls == ["json_schema", "json_object"]
+
+
+# --- Model zinciri / Gemini / BYOK ---------------------------------------------
+
+SECRET = "SIR-ANAHTAR-123"
+
+
+def _chain(monkeypatch, value, **extra):
+    from kys.config import parse_chain
+    monkeypatch.setattr(llm, "settings", dataclasses.replace(
+        llm.settings, model_query=parse_chain(value), gemini_api_key=extra.pop("gemini_api_key", "g-env"), **extra))
+
+
+def _http_error(req, code, body=b"hata"):
+    return llm.urllib.error.HTTPError(req.full_url, code, "x", {}, io.BytesIO(body))
+
+
+def test_parse_chain_single_and_multiple():
+    from kys.config import DEFAULT_QUERY_CHAIN, parse_chain
+    assert parse_chain("anthropic:claude-haiku-5-5") == (ModelSpec("anthropic", "claude-haiku-5-5"),)
+    chain = parse_chain(DEFAULT_QUERY_CHAIN)
+    assert [m.provider for m in chain] == ["gemini", "gemini", "anthropic"]
+
+
+def test_chain_falls_through_on_503_and_logs_each_attempt(conn, monkeypatch):
+    _chain(monkeypatch, "gemini:m1,gemini:m2")
+    seen = []
+
+    def urlopen(req, timeout):
+        body = json.loads(req.data)
+        seen.append((req.full_url, body["model"], req.get_header("Authorization")))
+        if body["model"] == "m1":
+            raise _http_error(req, 503)
+        return _openai_reply('{"value": "ok"}')
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    out = llm.structured(purpose="sorgu", tier="query", system="S", user="U", schema=Out, conn=conn)
+    assert out.value == "ok" and llm.last_model.get() == "gemini:m2"
+    assert seen[0][0] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    assert seen[0][2] == "Bearer g-env"
+    rows = conn.execute("SELECT model, ok, error FROM llm_calls ORDER BY id").fetchall()
+    assert [(r["model"], r["ok"]) for r in rows] == [("gemini:m1", 0), ("gemini:m2", 1)]
+    assert "503" in rows[0]["error"]
+
+
+def test_chain_skips_provider_without_key_and_permanent_errors(conn, monkeypatch):
+    _chain(monkeypatch, "gemini:m1,openai:x,anthropic:h", gemini_api_key="", openai_base_url="https://o.ai/v1")
+
+    def urlopen(req, timeout):
+        raise _http_error(req, 403)
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(llm, "client", lambda: SimpleNamespace(messages=SimpleNamespace(
+        parse=lambda **kw: _resp(parsed=Out(value="son")))))
+    assert llm.structured(purpose="s", tier="query", system="S", user="U", schema=Out, conn=conn).value == "son"
+    errs = [(r["model"], r["ok"], r["error"]) for r in conn.execute("SELECT * FROM llm_calls ORDER BY id")]
+    assert errs[0][0] == "gemini:m1" and "GEMINI_API_KEY" in errs[0][2]
+    assert errs[1][0] == "openai:x" and "403" in errs[1][2]
+    assert errs[2][:2] == ("anthropic:h", 1)
+
+
+def test_chain_exhausted_raises_unavailable_with_summary(conn, monkeypatch):
+    _chain(monkeypatch, "gemini:m1,gemini:m2")
+
+    def urlopen(req, timeout):
+        raise _http_error(req, 429, b"kota")
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    with pytest.raises(llm.LLMUnavailable) as ei:
+        llm.structured(purpose="sorgu", tier="query", system="S", user="U", schema=Out, conn=conn)
+    assert isinstance(ei.value, llm.LLMError)
+    assert "gemini:m1" in str(ei.value) and "gemini:m2" in str(ei.value) and "429" in str(ei.value)
+    assert conn.execute("SELECT COUNT(*) FROM llm_calls WHERE ok = 0").fetchone()[0] == 2
+
+
+def test_gemini_json_schema_400_falls_back_to_json_mode(monkeypatch):
+    _chain(monkeypatch, "gemini:m1")
+    kinds = []
+
+    def urlopen(req, timeout):
+        kind = json.loads(req.data)["response_format"]["type"]
+        kinds.append(kind)
+        if kind == "json_schema":
+            raise _http_error(req, 400)
+        return _openai_reply('{"value": "ok"}')
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    assert llm.structured(purpose="s", tier="query", system="S", user="U", schema=Out).value == "ok"
+    assert kinds == ["json_schema", "json_object"]
+
+
+def test_byok_uses_user_key_only_for_that_provider_and_never_logs_it(conn, monkeypatch, caplog):
+    _chain(monkeypatch, "anthropic:h1,gemini:m1,gemini:m2")
+    auths = []
+
+    def urlopen(req, timeout):
+        auths.append(req.get_header("Authorization"))
+        # Sağlayıcı hata gövdesinde anahtarı yankılasa bile loga/hataya girmemeli.
+        raise _http_error(req, 401, f"invalid key {SECRET}".encode())
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    with caplog.at_level("DEBUG"), pytest.raises(llm.LLMUnavailable) as ei:
+        llm.structured(purpose="sorgu", tier="query", system="S", user="U", schema=Out, conn=conn,
+                       byok=("gemini", SECRET))
+    assert auths == [f"Bearer {SECRET}"] * 2  # yalnızca gemini modelleri, kullanıcı anahtarıyla
+    assert SECRET not in str(ei.value) and SECRET not in caplog.text
+    assert SECRET not in json.dumps([tuple(r) for r in conn.execute("SELECT * FROM llm_calls")])
+
+
+def test_byok_provider_not_in_chain(monkeypatch):
+    _chain(monkeypatch, "gemini:m1")
+    with pytest.raises(llm.LLMUnavailable, match="anthropic"):
+        llm.structured(purpose="s", tier="query", system="S", user="U", schema=Out, byok=("anthropic", "k"))

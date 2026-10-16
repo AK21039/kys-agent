@@ -13,12 +13,18 @@ load_dotenv(PROJECT_ROOT / ".env")
 LOCAL_HOME = Path(os.getenv("LOCALAPPDATA", Path.home())) / "kys-agent"
 
 # openai: OpenAI uyumlu herhangi bir uç nokta (GLM, Gemini, Workers AI, OpenRouter, Groq, LM Studio...)
-PROVIDERS = ("anthropic", "ollama", "openai")
+# gemini: Google'ın OpenAI uyumlu uç noktası (anahtar GEMINI_API_KEY)
+PROVIDERS = ("anthropic", "ollama", "openai", "gemini")
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+# Sorgu katmanı model zinciri varsayılanı: sırayla denenir (kota/geçici hata → sıradaki)
+DEFAULT_QUERY_CHAIN = "gemini:gemini-3.6-flash,gemini:gemini-3.1-flash-lite,anthropic:claude-haiku-5-5"
+# BYOK'ta kullanıcı yalnızca bu sağlayıcılardan birini seçebilir
+BYOK_PROVIDERS = ("gemini", "anthropic")
 
 
 @dataclass(frozen=True)
 class ModelSpec:
-    provider: str   # 'anthropic' | 'ollama'
+    provider: str   # 'anthropic' | 'ollama' | 'openai' | 'gemini'
     model: str
 
     @classmethod
@@ -33,11 +39,16 @@ class ModelSpec:
         return f"{self.provider}:{self.model}"
 
 
+def parse_chain(value: str) -> tuple[ModelSpec, ...]:
+    """'a:x,b:y' → (ModelSpec, ModelSpec). Tek değer tek elemanlı zincirdir."""
+    return tuple(ModelSpec.parse(v.strip()) for v in value.split(",") if v.strip())
+
+
 @dataclass(frozen=True)
 class Settings:
     model_fast: ModelSpec
     model_smart: ModelSpec
-    model_query: ModelSpec          # sorgu servisi (asistan cevapları)
+    model_query: tuple[ModelSpec, ...]  # sorgu servisi (asistan cevapları): sırayla denenen model zinciri
     db_path: Path
     overrides_path: Path
     ollama_url: str
@@ -50,6 +61,9 @@ class Settings:
     access_token: str               # boşsa kimlik doğrulama yok (yalnızca yerel kullanım)
     db_url: str                     # konteyner açılışında DB yoksa buradan indirilir
     allowed_hosts: tuple[str, ...]  # MCP için Host başlığı beyaz listesi (boşsa kontrol yok)
+    gemini_api_key: str = ""        # GEMINI_API_KEY
+    remote_timeout: int = 90        # openai/gemini istek zaman aşımı (sn); zincirde takılmayı önler
+    cors_origins: tuple[str, ...] = ()  # KYS_CORS_ORIGINS; boşsa CORS kapalı
     inbox_dir: Path = Path("data/inbox")  # zamanlanmış yüklemenin okuduğu doküman klasörü (KYS_INBOX_DIR)
     pages_dir: Path | None = None   # önceden üretilmiş PDF sayfa PNG'leri: <pages_dir>/<dosya_sha256>/<n>.png
     publish_bucket: str = ""        # doluysa `kys scheduled` sonunda yayın kopyası buraya (gs://...) yüklenir
@@ -66,7 +80,7 @@ def _resolve(path: str) -> Path:
 settings = Settings(
     model_fast=ModelSpec.parse(os.getenv("KYS_MODEL_FAST", "ollama:gemma4:latest")),
     model_smart=ModelSpec.parse(os.getenv("KYS_MODEL_SMART", "anthropic:claude-sonnet-5-5")),
-    model_query=ModelSpec.parse(os.getenv("KYS_MODEL_QUERY", "anthropic:claude-haiku-5-5")),
+    model_query=parse_chain(os.getenv("KYS_MODEL_QUERY") or DEFAULT_QUERY_CHAIN),
     db_path=_resolve(os.getenv("KYS_DB_PATH", str(LOCAL_HOME / "kys.db"))),
     # Elle düzeltmeler dokümanların yanında (ağ paylaşımında, yedekli) durur; DB yeniden kurulsa da korunur.
     overrides_path=_resolve(os.getenv("KYS_OVERRIDES_PATH", "data/kys_overrides.json")),
@@ -75,6 +89,9 @@ settings = Settings(
     ollama_timeout=int(os.getenv("KYS_OLLAMA_TIMEOUT", "900")),
     openai_base_url=os.getenv("KYS_OPENAI_BASE_URL", "").rstrip("/"),
     openai_api_key=os.getenv("KYS_OPENAI_API_KEY", ""),
+    gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
+    remote_timeout=int(os.getenv("KYS_REMOTE_TIMEOUT", "90")),
+    cors_origins=tuple(o.strip().rstrip("/") for o in os.getenv("KYS_CORS_ORIGINS", "").split(",") if o.strip()),
     base_path="/" + os.getenv("KYS_BASE_PATH", "/qa").strip("/"),
     access_token=os.getenv("KYS_ACCESS_TOKEN", ""),
     db_url=os.getenv("KYS_DB_URL", ""),

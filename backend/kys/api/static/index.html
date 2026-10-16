@@ -82,6 +82,17 @@
   <section id="tab-ask">
     <form id="ask-form"><textarea id="question" placeholder="Örn: Arıza bildiriminde operatörün sorumlulukları nelerdir?"></textarea>
       <button>Sor</button></form>
+    <div id="byok" class="card hidden">
+      <div class="warn">Model şu an kullanılamıyor — kendi API anahtarınızı girin.</div>
+      <form id="byok-form" style="margin-top:8px">
+        <select id="byok-provider"><option value="gemini">Google Gemini</option><option value="anthropic">Anthropic Claude</option></select>
+        <input id="byok-key" type="password" placeholder="API anahtarı" autocomplete="off">
+        <button>Kaydet ve yeniden dene</button>
+      </form>
+      <div class="meta">Anahtar yalnızca bu sekmenin oturumunda (sessionStorage) tutulur, sunucuda saklanmaz veya loglanmaz.</div>
+    </div>
+    <div id="byok-active" class="meta hidden">Kendi anahtarınız kullanılıyor (<span id="byok-name"></span>).
+      <button id="byok-forget" type="button">Anahtarı unut</button></div>
     <div id="ask-out"></div>
   </section>
   <section id="tab-search" class="hidden">
@@ -115,11 +126,16 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let token = ""; try { token = localStorage.getItem("kys-token") || ""; } catch (e) {}
 
+const byok = {get provider() { try { return sessionStorage.getItem("kys-llm-provider") || ""; } catch (e) { return ""; } },
+              get key() { try { return sessionStorage.getItem("kys-llm-key") || ""; } catch (e) { return ""; } }};
+function showByok() { $("byok-active").classList.toggle("hidden", !byok.key); $("byok-name").textContent = byok.provider; }
+
 async function api(path, opts = {}) {
-  const headers = {"Content-Type": "application/json", ...(token ? {Authorization: "Bearer " + token} : {})};
+  const headers = {"Content-Type": "application/json", ...(token ? {Authorization: "Bearer " + token} : {}),
+    ...(path === "/ask" && byok.key ? {"X-LLM-Provider": byok.provider, "X-LLM-Key": byok.key} : {})};
   const r = await fetch(BASE + "/api" + path, {...opts, headers});
   if (r.status === 401) { $("login").classList.remove("hidden"); throw new Error("Erişim anahtarı gerekli"); }
-  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
+  if (!r.ok) { const e = await r.json().catch(() => ({})); const err = new Error(e.detail || r.statusText); err.code = e.code; throw err; }
   return r.json();
 }
 const fail = (el, e) => { $(el).innerHTML = `<div class="warn">${esc(e.message)}</div>`; };
@@ -147,11 +163,23 @@ $("ask-form").onsubmit = async (e) => {
     let h = `<div class="card"><div class="answer">${esc(a.answer)}</div>`;
     if (!a.yeterli_bilgi) h += `<div class="warn" style="margin-top:8px">Dokümanlar bu soruyu tam cevaplamaya yetmiyor.</div>`;
     if (a.unverified) h += `<div class="warn" style="margin-top:8px">${a.unverified} alıntı kaynak metinde doğrulanamadığı için gösterilmedi.</div>`;
-    h += `<div class="meta" style="margin-top:8px">${esc(a.model)}</div></div>`;
-    for (const c of a.citations) h += `<div class="card">[${c.no}] ${ref(c)} <span class="meta">${esc(c.title)}</span><div class="quote">${esc(c.quote)}</div></div>`;
+    h += `<div class="meta" style="margin-top:8px"><span class="pill">${esc(a.model || "model yok")}</span> ile cevaplandı</div></div>`;
+    $("byok").classList.add("hidden");
+    for (const c of a.citations) h += `<div class="card">[${c.no}] ${ref({...c, code: c.doc_code || c.code})} <span class="meta">${esc(c.title)}</span><div class="quote">${esc(c.quote)}</div></div>`;
     $("ask-out").innerHTML = h;
-  } catch (err) { fail("ask-out", err); } finally { btn.disabled = false; }
+  } catch (err) {
+    if (err.code === "MODEL_YOK") { $("byok").classList.remove("hidden"); $("ask-out").innerHTML = ""; }
+    else fail("ask-out", err);
+  } finally { btn.disabled = false; }
 };
+
+$("byok-form").onsubmit = (e) => {
+  e.preventDefault(); const k = $("byok-key").value.trim(); if (!k) return;
+  try { sessionStorage.setItem("kys-llm-provider", $("byok-provider").value); sessionStorage.setItem("kys-llm-key", k); } catch (x) {}
+  $("byok-key").value = ""; $("byok").classList.add("hidden"); showByok(); $("ask-form").requestSubmit();
+};
+$("byok-forget").onclick = () => { try { sessionStorage.removeItem("kys-llm-provider"); sessionStorage.removeItem("kys-llm-key"); } catch (x) {} showByok(); };
+showByok();
 
 $("search-form").onsubmit = async (e) => {
   e.preventDefault(); const q = $("q").value.trim(); if (!q) return;
