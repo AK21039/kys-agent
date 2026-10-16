@@ -36,8 +36,12 @@ PowerShell (kullanıcı):
 # diğer: docs | show KOD | search "..." | refs | uncoded | set-code ESKI YENI [--rev NN] | stats
 # OCR: ocr-check | reingest KOD [--apply]      eski Office: convert-legacy KLASÖR (Word/Excel COM)
 # akış: flow KOD | render KOD | flow-compare KOD DOSYA.vsdx | content-compare KLASÖR
-# çıkarım: extract-export | extract-check | extract-import      yayın: publish [--pages]
+# çıkarım: extract-export | extract-check | extract-import      yayın: publish --pages --upload gs://...
+# karar matrisi: karar-kontrol DOSYA.xlsx [--out cikti.xlsx] [--json yol]
+& "$env:LOCALAPPDATA\kys-agent\.venv\Scripts\python.exe" infra\build_web.py   # ai dalından web uygulaması
 ```
+Güncel durum, açık işler ve canlı adresler: [docs/DURUM.md](docs/DURUM.md). `ai` dalı AI Studio'nundur; **main'e
+merge edilmez**. cmd.exe kapalıdır: npm/npx yerine `node .../npm-cli.js`, `.cmd` yerine doğrudan exe/`powershell`.
 Bash (geliştirme):
 ```bash
 PY="$LOCALAPPDATA/kys-agent/.venv/Scripts/python.exe"

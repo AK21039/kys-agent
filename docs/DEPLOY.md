@@ -173,8 +173,23 @@ Doğrulama: `/qa/app/` açılır, `/qa/api/health` 200, tokensız `/qa/api/stats
 | Cloudflare Containers | Workers Paid (5 $/ay) | Alan adıyla aynı yerde. |
 | Herhangi bir VPS | Değişken | `docker run -p 8080:8080 -v ./data:/data ghcr.io/ak21039/kys-agent` |
 
-`paktenops.com/qa` yolu, Cloudflare'de bir yönlendirme kuralı (Worker route veya Origin Rule) ile Cloud Run adresine
-bağlanır (`KYS_ALLOWED_HOSTS=paktenops.com` ile MCP Host listesi). Cloudflare Access ile e-posta tabanlı giriş eklenir.
+## Cloudflare (qa.paktenops.com, paktenops.com/qa)
+
+Ayrı bir Worker (`qa`, kod: `infra/cloudflare-qa-worker.mjs`, panelden yapıştırılır) istekleri Cloud Run'a iletir.
+paktenops.com'un kendi Worker'ı (`paktencare-tunnel`, canlı PaktenCare sistemi) **değiştirilmez**.
+
+| Giriş | Tür | Not |
+|---|---|---|
+| `qa.paktenops.com` | Custom Domain | `/` → `/qa/app/` yönlendirmesi |
+| `paktenops.com/qa*` | Route | Yalnızca `/qa` ile başlayan yollar; PaktenCare'in diğer yolları etkilenmez |
+| `qa.pakten.workers.dev` | Worker URL | `KYS_TOKEN` tanımlıyken 403 döner; kapatılması önerilir |
+
+- **Token'sız kullanım:** Zero Trust → Access ile ilgili adres(ler) korunur (One-time PIN, e-posta listesi). Access
+  uygulamaları adres bazlıdır: `qa.paktenops.com` ve `paktenops.com/qa` için ayrı ayrı tanımlanmalıdır. Access
+  kurulduktan sonra Worker'a `KYS_TOKEN` secret'ı eklenir; Worker Authorization başlığını kendisi ekler.
+  **Sıra önemli:** Access'siz `KYS_TOKEN` eklemek veriyi herkese açar.
+- MCP istemcileri Access'ten geçemez; MCP için Cloud Run adresi + Bearer token kullanılır.
+- Kurumsal DNS yeni alt alan adını geç öğrenebilir; doğrulama için `nslookup qa.paktenops.com 1.1.1.1`.
 
 ## Yerelde deneme
 

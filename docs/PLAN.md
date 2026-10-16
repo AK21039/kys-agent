@@ -148,7 +148,10 @@ Genişletme (sonraki ajanlar): Revizyon Etki Analizi (graf üzerinde tek sorgu),
 Her faz, kullanılabilir bir dikey dilimle biter. Önce **pilot küme**: 20-30 doküman + tek bir süreç ailesi
 (ör. Satınalma). Tüm külliyat pilot ölçümleri tuttuktan sonra yüklenir.
 
-### Faz 0: Temel (≈1 hafta) ← *şu an*
+> **Güncel durum ve devir notu:** [DURUM.md](DURUM.md) (2026-10-16). Faz 0 tamam; Faz 1'in çıkarım ve yayın kısmı
+> tamam (onay kuyruğu ve varlık çözümleme bekliyor); Faz 2'nin karar matrisi kontrolü çalışıyor.
+
+### Faz 0: Temel (≈1 hafta) ✔
 - [x] Revize plan, proje yapısı, CLAUDE.md, geliştirme alt ajanları
 - [x] Ontoloji, veritabanı şeması, Türkçe metin normalizasyonu, alıntı doğrulayıcı
 - [x] Ayrıştırıcılar (DOCX/PDF/XLSX/TXT), bölümleme, regex metadata, CLI ile yükleme + arama
