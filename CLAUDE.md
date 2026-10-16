@@ -38,6 +38,8 @@ PowerShell (kullanıcı):
 # akış: flow KOD | render KOD | flow-compare KOD DOSYA.vsdx | content-compare KLASÖR
 # çıkarım: extract-export | extract-check | extract-import      yayın: publish --pages --upload gs://...
 # karar matrisi: karar-kontrol DOSYA.xlsx [--out cikti.xlsx] [--json yol]
+# rol birleştirme: rol-grupla [--tip ROL|BIRIM] [--esik 0.85] → Excel'de KARAR doldur → rol-onayla DOSYA.xlsx [--apply]
+#   (kararlar data/kys_role_merges.json'da; extract-import sonunda otomatik yeniden uygulanır)
 & "$env:LOCALAPPDATA\kys-agent\.venv\Scripts\python.exe" infra\build_web.py   # ai dalından web uygulaması
 ```
 Güncel durum, açık işler ve canlı adresler: [docs/DURUM.md](docs/DURUM.md). `ai` dalı AI Studio'nundur; **main'e

@@ -162,3 +162,9 @@ class DocCheck(StrEnum):
     DOGRULANDI = "DOGRULANDI"            # dayanak bu dokümanda bulundu
     DESTEKLEMIYOR = "DESTEKLEMIYOR"      # doküman sistemde var ama dayanak başka dokümanda
     SISTEMDE_YOK = "SISTEMDE_YOK"        # doküman veritabanında yok
+
+
+class MergeDecision(StrEnum):
+    """Rol birleştirme Excel'inde kullanıcının satır kararı (`kys rol-onayla`)."""
+    EVET = "EVET"      # varyant bu gruba aittir, ana ada birleştirilir
+    HAYIR = "HAYIR"    # varyant ayrı roldür; bir daha bu gruba önerilmez

@@ -59,8 +59,12 @@ rol birleştirme gerekiyor. Diğer sayfalar (Planlama, Satınalma, Üretim) ilgi
 
 ## Açık işler (öncelik sırasıyla)
 
-1. **Rol birleştirme (Faz 3 ilk adım):** 279 rolün varyantlarını grupla, kullanıcı onayına sun; karar kontrolü ve
-   analiz onaylı aliasları kullansın (ör. "Mekanik Bakım Teknisyeni" = "Mekanik Teknisyeni", birim ↔ direktör).
+1. **Rol birleştirme (Faz 3 ilk adım):** kod hazır (2026-10-16, `process/role_merge.py`, `tests/test_role_merge.py`):
+   `kys rol-grupla` → `data/rol_gruplari.xlsx` (KARAR EVET/HAYIR, ANA AD) → `kys rol-onayla DOSYA` (önizleme) →
+   `--apply`. Eski adlar ana rolün takma adı olur, tüm atıflar (kural, süreç, adım, karar, onay zinciri, kenar) taşınır;
+   karar kontrolü (`RoleIndex`) takma adları zaten okuyor. Kararlar `data/kys_role_merges.json` (DB dışında).
+   **Bekleyen:** canlı DB'de (bu PC) çalıştırma + kullanıcı onayı + karar matrisini yeniden koşma.
+   Sonraki adım: birim ↔ yönetici (örn. "Yatırım ve Bakım" ↔ "Yatırımlar ve Bakım Direktörü") onaylı eşlemesi.
 2. **Onay Kuyruğu:** 1381 `ONERILDI` kuralın onay/düzelt/reddet ekranı (API + `/qa/` sekmesi; AI Studio'ya ekran görevi).
 3. Kodsuz 9 prosedürün kod ve yürürlük durumu (kullanıcıdan); PR11-SA-2/3/4 dokümanlarının yüklenmesi.
 4. Analiz motoru: deterministik çelişki/boşluk taramaları, bulgu raporu.

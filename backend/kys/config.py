@@ -71,6 +71,7 @@ class Settings:
     run_region: str = "europe-west1"
     files_dir: Path | None = None   # orijinal dosyaların bulunabileceği ek klasör (dosya adıyla aranır)
     web_dir: Path | None = None     # KYS_WEB_DIR: derlenmiş web uygulaması (infra/build_web.py → web-dist); {base}/app altında sunulur
+    role_merges_path: Path = Path("data/kys_role_merges.json")  # onaylı rol birleştirmeleri (kys rol-onayla)
 
 
 def _resolve(path: str) -> Path:
@@ -85,6 +86,8 @@ settings = Settings(
     db_path=_resolve(os.getenv("KYS_DB_PATH", str(LOCAL_HOME / "kys.db"))),
     # Elle düzeltmeler dokümanların yanında (ağ paylaşımında, yedekli) durur; DB yeniden kurulsa da korunur.
     overrides_path=_resolve(os.getenv("KYS_OVERRIDES_PATH", "data/kys_overrides.json")),
+    # Onaylı rol birleştirmeleri de aynı nedenle DB dışında: yeniden kurulumda `extract-import` sonunda uygulanır.
+    role_merges_path=_resolve(os.getenv("KYS_ROLE_MERGES_PATH", "data/kys_role_merges.json")),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434").rstrip("/"),
     ollama_num_ctx=int(os.getenv("KYS_OLLAMA_NUM_CTX", "16384")),
     ollama_timeout=int(os.getenv("KYS_OLLAMA_TIMEOUT", "900")),

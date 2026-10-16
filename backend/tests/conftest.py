@@ -7,12 +7,13 @@ from kys import db
 
 @pytest.fixture(autouse=True)
 def isolated_overrides(tmp_path, monkeypatch):
-    """Testler gerçek data/kys_overrides.json dosyasına asla dokunmaz."""
+    """Testler gerçek data/kys_overrides.json ve data/kys_role_merges.json dosyalarına asla dokunmaz."""
     import dataclasses
 
     from kys import config
     monkeypatch.setattr(config, "settings",
-                        dataclasses.replace(config.settings, overrides_path=tmp_path / "overrides.json"))
+                        dataclasses.replace(config.settings, overrides_path=tmp_path / "overrides.json",
+                                            role_merges_path=tmp_path / "role_merges.json"))
 
 
 @pytest.fixture

@@ -426,6 +426,64 @@ def cmd_extract_import(args) -> None:
         print(f"[ok   ] {f.name}  {r.counts}")
     print(f"\n{totals['dosya']} doküman, {totals['kural']} kural eklendi (ONERILDI), "
           f"{totals['atilan']} kanıtsız öğe atıldı.")
+    from .process import role_merge
+    m = role_merge.apply_saved(conn)   # yeni çıkarımın açtığı varyantlar onaylı rollere bağlanır
+    if m["birlesen"] or m["takma_ad"]:
+        print(f"Onaylı rol birleştirmeleri uygulandı: {m['grup']} grup, {m['birlesen']} varlık birleşti, "
+              f"{m['tasinan']} atıf taşındı.")
+
+
+def cmd_rol_grupla(args) -> None:
+    from .process import role_merge
+    conn = db.connect(readonly=True) if settings.db_path.exists() else _conn()
+    groups = role_merge.suggest_groups(conn, args.tip, args.esik)
+    total = conn.execute("SELECT COUNT(*) FROM entities WHERE entity_type = ?", (args.tip,)).fetchone()[0]
+    out = Path(args.out) if args.out else PROJECT_ROOT / "data" / f"{args.tip.lower()}_gruplari.xlsx"
+    out.write_bytes(role_merge.render_xlsx(groups))
+    for gi, g in enumerate(groups, 1):
+        print(f"{gi:>3}. {g.canonical.name}  ({g.canonical.usage})")
+        for m in g.members[1:]:
+            print(f"       ~ {m.name}  ({m.usage}, skor {m.score:.2f})")
+    n = sum(len(g.members) for g in groups)
+    print(f"\n{total} {args.tip} varlığı · {len(groups)} aday grup · {n} ad gruplandı "
+          f"(gruplanmayan {total - n}).\nExcel: {out}\nKARAR sütununu doldurup: kys rol-onayla \"{out}\"")
+
+
+def cmd_rol_onayla(args) -> None:
+    from .process import role_merge
+    src = Path(args.file)
+    if not src.is_file():
+        sys.exit(f"Dosya yok: {src}")
+    try:
+        decisions = role_merge.read_decisions(src.read_bytes())
+    except (ValueError, KeyError) as e:
+        sys.exit(f"Excel okunamadı: {e}")
+    if not decisions:
+        sys.exit("KARAR sütununda EVET/HAYIR yazılı satır yok; yapılacak bir şey yok.")
+    for d in decisions:
+        print(f"[{d.entity_type}] {d.ana}")
+        for n in d.evet:
+            if n != d.ana:
+                print(f"    + {n}")
+        for n in d.hayir:
+            print(f"    x {n} (ayrı rol)")
+    conn = _conn()
+    if not args.apply:
+        # Önizleme: kayıtlı + yeni kararlar DB'de denenir, geri alınır; JSON'a yazılmaz.
+        data = role_merge.load()
+        for d in decisions:
+            names = [n for n in dict.fromkeys([d.ana, *d.evet]) if n]
+            if len(names) >= 2:
+                data.setdefault(d.entity_type, {"birlesik": [], "ayri": []})["birlesik"].append(
+                    {"ana": d.ana, "varyantlar": [n for n in names if n != d.ana]})
+        s = role_merge.apply_saved(conn, data, commit=False)
+        print(f"\nÖNİZLEME (yazılmadı): {s['birlesen']} varlık birleşir, {s['tasinan']} atıf taşınır, "
+              f"{s['takma_ad']} takma ad eklenir.\nUygulamak için: kys rol-onayla \"{src}\" --apply")
+        return
+    role_merge.save_decisions(decisions)
+    s = role_merge.apply_saved(conn)
+    print(f"\nUygulandı: {s['birlesen']} varlık birleşti, {s['tasinan']} atıf taşındı, {s['takma_ad']} takma ad eklendi."
+          f"\nKararlar: {settings.role_merges_path}")
 
 
 def cmd_karar_kontrol(args) -> None:
@@ -575,6 +633,17 @@ def main(argv=None) -> None:
     s.add_argument("--json", help="sonuçları JSON olarak da yaz")
     s.add_argument("--limit", type=int, help="yalnızca ilk N karar satırını işle")
     s.set_defaults(fn=cmd_karar_kontrol)
+    s = sub.add_parser("rol-grupla", help="aynı rolün yazım varyantlarını grupla, onay Excel'i üret (yazmaz)")
+    from .ontology import EntityType
+    from .process.roles import SAME_ROLE_MIN
+    s.add_argument("--tip", default=EntityType.ROL.value, choices=[EntityType.ROL.value, EntityType.BIRIM.value])
+    s.add_argument("--esik", type=float, default=SAME_ROLE_MIN, help="gruba girme benzerlik eşiği (0..1)")
+    s.add_argument("--out", help="Excel (varsayılan: data/<tip>_gruplari.xlsx)")
+    s.set_defaults(fn=cmd_rol_grupla)
+    s = sub.add_parser("rol-onayla", help="doldurulmuş rol grupları Excel'ini uygula; --apply olmadan yazmaz")
+    s.add_argument("file")
+    s.add_argument("--apply", action="store_true")
+    s.set_defaults(fn=cmd_rol_onayla)
     sub.add_parser("stats", help="LLM kullanım istatistikleri").set_defaults(fn=cmd_stats)
     args = p.parse_args(argv)
     args.fn(args)
