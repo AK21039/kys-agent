@@ -1,5 +1,10 @@
 # ⚠️ KESİN KURAL: KULLANICI ONAYI OLMADAN KODLAMA YAPILAMAZ
-> **KULLANICI TALİMATI:** Kullanıcının açık onayı olmadan hiçbir kodlama, dosya değişikliği, dönüştürme veya silme işlemi YAPILAMAZ. Yapılacak her işlem önce detaylıca açıklanacak ve kullanıcının onayı istenecektir. Onay alınmadan tek bir satır kod değiştirilemez.
+> **KALICI TALİMATLAR (DEĞİŞTİRİLEMEZ):**
+> 1. **DİL VE MİMARİ:** Dil kesinlikle **Python** kalacaktır. `backend/` yapısı ve `CLAUDE.md` kuralları eksiksiz korunacaktır.
+> 2. **GÖREV SINIRI:** Yalnızca kullanıcının açıkça verdiği görev yapılacaktır; inisiyatif alarak başka framework'e çevirme, mimari dönüştürme veya fazladan işlem yapılamaz.
+> 3. **AÇIK KULLANICI ONAYI:** Kullanıcının açık ve net onayı olmadan **HİÇBİR kodlama, framework değişikliği, dosya silme veya mimari müdahale YAPILAMAZ.**
+> 4. **AÇIKLAMA VE ONAY İSTEMİ:** Yapılması planlanan her değişiklik ve işlem önce kullanıcıya gerekçesi, kapsamı ve yöntemiyle açıkça anlatılacak ve kullanıcının onayı istenecektir. Kullanıcı "Onaylıyorum" demeden tek bir satır kod yazılamaz veya değiştirilemez.
+> 5. **KAYNAK VE DOĞRULAMA:** Kaynağı olmayan, doğrulanmamış veya sentetik hiçbir veri sisteme dahil edilemez ("Kanıtsız bulgu yok").
 
 # KYS Ajan Sistemi — Geliştirici Rehberi
 
