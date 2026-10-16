@@ -71,16 +71,66 @@ const notifyUnauthorized = () => {
   });
 };
 
+declare global {
+  interface Window {
+    KYS_API_BASE?: string;
+  }
+}
+
+export const resolveApiBase = (): string => {
+  // 1. localStorage.kys_api_base
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_API_BASE);
+    if (saved && saved.trim()) {
+      return saved.trim();
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. window.KYS_API_BASE
+  if (
+    typeof window !== 'undefined' &&
+    window.KYS_API_BASE &&
+    typeof window.KYS_API_BASE === 'string' &&
+    window.KYS_API_BASE.trim()
+  ) {
+    return window.KYS_API_BASE.trim();
+  }
+
+  // 3. import.meta.env.VITE_API_BASE
+  try {
+    const envBase = (import.meta as any).env?.VITE_API_BASE;
+    if (envBase && typeof envBase === 'string' && envBase.trim()) {
+      return envBase.trim();
+    }
+  } catch {
+    // ignore
+  }
+
+  // 4. Uygulama /app/ altından açılmışsa: location.origin + location.pathname.replace(/\/app(\/.*)?$/, '')
+  if (typeof window !== 'undefined' && window.location) {
+    const { origin, pathname } = window.location;
+    if (pathname && /\/app(\/.*)?$/.test(pathname)) {
+      const basePath = pathname.replace(/\/app(\/.*)?$/, '');
+      return `${origin}${basePath}`;
+    }
+  }
+
+  return '';
+};
+
 export const getApiConfig = () => {
-  let apiBase = '';
+  let savedApiBase = '';
   let token = '';
   try {
-    apiBase = localStorage.getItem(STORAGE_KEY_API_BASE) || '';
+    savedApiBase = localStorage.getItem(STORAGE_KEY_API_BASE) || '';
     token = localStorage.getItem(STORAGE_KEY_TOKEN) || '';
   } catch {
     // ignore
   }
-  return { apiBase, token };
+  const apiBase = resolveApiBase();
+  return { apiBase, savedApiBase, token };
 };
 
 export const setApiConfig = (apiBase: string, token: string) => {

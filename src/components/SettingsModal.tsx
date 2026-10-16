@@ -10,7 +10,7 @@ interface SettingsModalProps {
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSaved }) => {
   const currentConfig = kysApi.getApiConfig();
-  const [apiBase, setApiBase] = useState<string>(currentConfig.apiBase);
+  const [apiBase, setApiBase] = useState<string>(currentConfig.savedApiBase || '');
   const [token, setToken] = useState<string>(currentConfig.token);
   const [testing, setTesting] = useState<boolean>(false);
   const [testResult, setTestResult] = useState<{
@@ -18,6 +18,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSaved }
     data?: HealthResponse;
     error?: string;
   } | null>(null);
+
+  const activeBase = apiBase.trim() || currentConfig.apiBase;
 
   const handleTest = async () => {
     setTesting(true);
@@ -71,13 +73,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSaved }
             </label>
             <input
               type="text"
-              placeholder="Örn: https://kys-servisi.sirket.com veya /qa (Boş bırakılırsa mevcut kök)"
+              placeholder={currentConfig.apiBase ? `Otomatik: ${currentConfig.apiBase}` : 'Örn: https://kys-servisi.sirket.com veya /qa'}
               value={apiBase}
               onChange={(e) => setApiBase(e.target.value)}
               autoComplete="off"
             />
             <small style={{ color: 'var(--text-muted)', fontSize: '12px', display: 'block', marginTop: 4 }}>
-              Tüm istekler bu taban adrese yapılır (ör. <code>{apiBase ? `${apiBase.replace(/\/+$/, '')}/api/health` : '/api/health'}</code>).
+              Tüm istekler bu taban adrese yapılır (ör. <code>{activeBase ? `${activeBase.replace(/\/+$/, '')}/api/health` : '/api/health'}</code>).
             </small>
           </div>
 
