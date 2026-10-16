@@ -126,3 +126,32 @@ class FindingStatus(StrEnum):
     KABUL_EDILDI = "KABUL_EDILDI"
     YANLIS_POZITIF = "YANLIS_POZITIF"
     COZULDU = "COZULDU"
+
+
+class DecisionStatus(StrEnum):
+    """Karar matrisi satırının doküman karşısındaki durumu (process/decisions.py)."""
+    KAYNAKLI = "KAYNAKLI"        # dayanak bulundu, matristeki rol/limit/süre dokümanla uyumlu
+    CELISKI = "CELISKI"          # dokümanda farklı rol/limit/süre var
+    KISMI = "KISMI"              # karar dokümanda var ama rol/limit/süre doğrulanamadı
+    KAYNAK_YOK = "KAYNAK_YOK"    # dokümanlarda dayanak bulunamadı
+
+
+class DecisionField(StrEnum):
+    """Karar matrisinde karşılaştırılan alanlar."""
+    ONAYLAYAN = "ONAYLAYAN"      # onaylayan + yetkili
+    HAZIRLAYAN = "HAZIRLAYAN"
+    LIMIT = "LIMIT"
+    SURE = "SURE"
+
+
+class SourceStance(StrEnum):
+    """Seçilen kaynağın karar karşısındaki konumu (LLM yargısı)."""
+    DESTEKLER = "DESTEKLER"
+    CELISIR = "CELISIR"
+    ILGILI = "ILGILI"            # konuyla ilgili ama karara dayanak değil
+
+
+class CandidateKind(StrEnum):
+    BOLUM = "BOLUM"
+    KURAL = "KURAL"
+    ADIM = "ADIM"

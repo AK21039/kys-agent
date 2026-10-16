@@ -60,6 +60,18 @@
                   padding: 4px 12px; cursor: pointer; font: inherit; }
   @media (max-width: 900px) { .flow-grid { grid-template-columns: 1fr; } }
   @media (max-width: 600px) { form { flex-direction: column; } .hide-sm { display: none; } }
+  .st { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 10px; white-space: nowrap; }
+  .st-KAYNAKLI { background: #c6efce; color: #14532d; }
+  .st-CELISKI { background: #ffc7ce; color: #7f1d1d; }
+  .st-KISMI { background: #ffeb9c; color: #6b4e00; }
+  .st-KAYNAK_YOK { background: #d9d9d9; color: #333; }
+  tr.dec-row { cursor: pointer; }
+  tr.dec-row:hover td { background: var(--accent-soft); }
+  .dec-sum { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .dec-sum button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 6px;
+                    padding: 4px 10px; cursor: pointer; font: inherit; }
+  .dec-sum button.on { border-color: var(--accent); }
+  #dec-out td, #dec-out th { font-size: 13px; }
 </style>
 </head>
 <body>
@@ -71,6 +83,7 @@
     <button data-tab="docs">Dokümanlar</button>
     <button data-tab="flow">Süreçler</button>
     <button data-tab="refs">Eksik atıflar</button>
+    <button data-tab="decisions">Karar Matrisi</button>
   </nav>
 
   <div id="login" class="card hidden">
@@ -118,6 +131,28 @@
       </div>
     </div>
   </section>
+  <section id="tab-decisions" class="hidden">
+    <div class="card">
+      <b>Karar matrisi kontrolü</b>
+      <div class="meta" style="margin:4px 0 8px">Karar matrisinizi (.xlsx veya .csv; düz tablo ya da RACI) yükleyin. Her karar için KYS dokümanlarındaki
+        dayanak (doküman, madde, birebir alıntı) bulunur; rol, limit ve süre dokümanla karşılaştırılır. Dosya sunucuda saklanmaz.</div>
+      <form id="dec-form" style="margin-bottom:0"><input type="file" id="dec-file" accept=".xlsx,.xlsm,.csv"><button>Kontrol et</button></form>
+      <div id="dec-progress" class="hidden" style="margin-top:10px">
+        <progress id="dec-bar" max="1" value="0" style="width:100%"></progress>
+        <div id="dec-prog-text" class="meta"></div>
+      </div>
+    </div>
+    <div id="dec-byok" class="card hidden">
+      <div class="warn">Model şu an kullanılamıyor — kendi API anahtarınızı girin.</div>
+      <form id="dec-byok-form" style="margin-top:8px">
+        <select id="dec-byok-provider"><option value="gemini">Google Gemini</option><option value="anthropic">Anthropic Claude</option></select>
+        <input id="dec-byok-key" type="password" placeholder="API anahtarı" autocomplete="off">
+        <button>Kaydet ve devam et</button>
+      </form>
+      <div class="meta">Anahtar yalnızca bu sekmenin oturumunda tutulur, sunucuda saklanmaz.</div>
+    </div>
+    <div id="dec-out"></div>
+  </section>
   <section id="tab-doc" class="hidden"><div id="doc-out"></div></section>
 </main>
 <script>
@@ -143,7 +178,7 @@ const ref = (d) => `<span class="ref" data-code="${esc(d.code)}">${esc(d.code)} 
 
 function show(tab) {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
-  ["ask", "search", "docs", "flow", "refs", "doc"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== tab));
+  ["ask", "search", "docs", "flow", "refs", "decisions", "doc"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== tab));
   document.querySelector("main").classList.toggle("wide", tab === "flow");
   if (tab === "flow" && $("flow-sel").options.length < 2) loadProcessList();
   if (tab === "docs" && !$("docs-out").innerHTML) loadDocs();
@@ -294,6 +329,116 @@ async function showPage(n) {
 }
 $("pg-prev").onclick = () => cur && showPage(curPage - 1);
 $("pg-next").onclick = () => cur && showPage(curPage + 1);
+
+// ---- Karar Matrisi: dosya yükle, parça parça kontrol et, sonuç tablosu, Excel indir ----
+const DEC_CHUNK = 12, DEC_STATUSES = ["KAYNAKLI", "CELISKI", "KISMI", "KAYNAK_YOK"];
+const DEC_LABEL = {KAYNAKLI: "Kaynaklı", CELISKI: "Çelişki", KISMI: "Kısmi", KAYNAK_YOK: "Kaynak yok"};
+let decRows = [], decFile = null, decFilter = "", decState = {meta: null, total: 0, done: false};
+
+function decHeaders() {
+  return {...(token ? {Authorization: "Bearer " + token} : {}),
+          ...(byok.key ? {"X-LLM-Provider": byok.provider, "X-LLM-Key": byok.key} : {})};
+}
+async function decPost(params, extra) {
+  const fd = new FormData(); fd.append("file", decFile);
+  if (extra) for (const [k, v] of Object.entries(extra)) fd.append(k, v);
+  const r = await fetch(BASE + "/api/decisions/check?" + new URLSearchParams(params), {method: "POST", headers: decHeaders(), body: fd});
+  if (r.status === 401) { $("login").classList.remove("hidden"); throw new Error("Erişim anahtarı gerekli"); }
+  if (!r.ok) {
+    const e = await r.json().catch(() => ({}));
+    const err = new Error(typeof e.detail === "string" ? e.detail : (e.detail ? JSON.stringify(e.detail) : r.statusText)); err.code = e.code; throw err;
+  }
+  return r;
+}
+
+$("dec-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const f = $("dec-file").files[0]; if (!f) { fail("dec-out", new Error("Önce bir dosya seçin")); return; }
+  if (f.size > 5 * 1024 * 1024) { fail("dec-out", new Error("Dosya en çok 5 MB olabilir")); return; }
+  decFile = f; await runDecisions();
+};
+$("dec-byok-form").onsubmit = (e) => {
+  e.preventDefault(); const k = $("dec-byok-key").value.trim(); if (!k) return;
+  try { sessionStorage.setItem("kys-llm-provider", $("dec-byok-provider").value); sessionStorage.setItem("kys-llm-key", k); } catch (x) {}
+  $("dec-byok-key").value = ""; $("dec-byok").classList.add("hidden"); showByok(); runDecisions(true);
+};
+
+async function runDecisions(resume) {
+  const btn = $("dec-form").querySelector("button"); btn.disabled = true;
+  if (!resume) { decRows = []; decFilter = ""; $("dec-out").innerHTML = ""; }
+  $("dec-byok").classList.add("hidden"); $("dec-progress").classList.remove("hidden");
+  const t0 = Date.now(); let total = 0, meta = null, timer = null;
+  const tick = () => { $("dec-prog-text").textContent =
+    `${decRows.length}${total ? " / " + total : ""} karar kontrol edildi · ${Math.round((Date.now() - t0) / 1000)} sn — dokümanlar taranıyor, lütfen bekleyin…`; };
+  timer = setInterval(tick, 1000);
+  try {
+    do {
+      const r = await decPost({offset: decRows.length, limit: DEC_CHUNK});
+      const j = await r.json();
+      total = j.aralik.toplam; meta = j.matris;
+      if (!j.satirlar.length) break;
+      decRows.push(...j.satirlar);
+      $("dec-bar").max = total; $("dec-bar").value = decRows.length; tick(); renderDecisions(meta, total);
+    } while (decRows.length < total);
+    renderDecisions(meta, total, true);
+  } catch (err) {
+    if (err.code === "MODEL_YOK") { $("dec-byok").classList.remove("hidden"); if (decRows.length) renderDecisions(meta, total); }
+    else { fail("dec-out", err); }
+  } finally { clearInterval(timer); $("dec-progress").classList.add("hidden"); btn.disabled = false; }
+}
+
+function renderDecisions(meta, total, done) {
+  decState = {meta, total, done: !!done};
+  const counts = Object.fromEntries(DEC_STATUSES.map((s) => [s, decRows.filter((r) => r.durum === s).length]));
+  const unv = decRows.filter((r) => r.dogrulanmamis).length;
+  let h = `<div class="card"><div class="dec-sum"><b>${decRows.length} / ${total} karar</b>` +
+    DEC_STATUSES.map((s) => `<button type="button" data-f="${s}" class="${decFilter === s ? "on" : ""}"><span class="st st-${s}">${DEC_LABEL[s]}</span> ${counts[s]}</button>`).join("") +
+    (decFilter ? `<button type="button" data-f="">Tümü</button>` : "") +
+    (done ? `<button type="button" id="dec-xlsx" style="margin-left:auto">Excel indir</button>` : "") + `</div>`;
+  h += `<div class="meta">Biçim: ${meta.bicim === "raci" ? "RACI" : "düz tablo"}${meta.sayfa ? " · sayfa: " + esc(meta.sayfa) : ""} · başlık satırı ${meta.baslik_satiri}` +
+    ` · atlanan satır ${meta.atlanan_satir}${unv ? ` · <b>${unv}</b> satır doğrulanmamış (onaysız kural) kaynağa dayanıyor` : ""}</div>`;
+  if (meta.harf_anlamlari) h += `<div class="meta">Harf anlamları (${meta.harf_kaynagi === "aciklama" ? "sayfadaki açıklamadan" : "varsayılan"}): ${Object.entries(meta.harf_anlamlari).map(([k, v]) => esc(k + "=" + v)).join(", ")}</div>`;
+  for (const w of meta.uyarilar || []) h += `<div class="warn" style="margin-top:6px">${esc(w)}</div>`;
+  h += `</div><div class="card"><table><tr><th>Satır</th><th>Karar</th><th>Durum</th><th class="hide-sm">Kaynak</th></tr>`;
+  decRows.forEach((r, i) => {
+    if (decFilter && r.durum !== decFilter) return;
+    const src = r.kaynaklar.map((s) => `${esc(s.doc_code)} md.${esc(s.clause_no || "-")}`).join("<br>") || "-";
+    h += `<tr class="dec-row" data-i="${i}"><td>${r.satir}</td><td>${esc(r.karar)}</td>` +
+      `<td><span class="st st-${esc(r.durum)}">${esc(DEC_LABEL[r.durum] || r.durum)}</span>${r.dogrulanmamis ? '<div class="meta">doğrulanmamış kaynak</div>' : ""}</td>` +
+      `<td class="hide-sm">${src}</td></tr><tr class="hidden" id="dec-d-${i}"><td></td><td colspan="3">${decDetail(r)}</td></tr>`;
+  });
+  $("dec-out").innerHTML = h + "</table></div>";
+}
+
+function decDetail(r) {
+  let h = `<div>${esc(r.aciklama)}</div>`;
+  if (r.celiskiler.length) h += `<div class="warn" style="margin-top:6px">` + r.celiskiler.map((c) =>
+    `<b>${esc(c.alan)}</b>: matriste <b>${esc(c.matris)}</b>, dokümanda <b>${esc(c.dokuman)}</b> (${esc(c.kaynak)})`).join("<br>") + `</div>`;
+  for (const s of r.kaynaklar) h += `<div class="quote">“${esc(s.quote)}”<div class="meta">${ref({code: s.doc_code, revision: s.revision, clause_no: s.clause_no})} ${esc(s.title)}` +
+    `${s.dogrulanmamis ? ' · <b>doğrulanmamış kaynak</b> (onaysız kural/çıkarım)' : ""}${s.iliski === "CELISIR" ? " · kararla çelişiyor" : ""}</div></div>`;
+  if (r.ilgili.length) h += `<div class="meta" style="margin-top:6px">İlgili (dayanak değil): ${r.ilgili.map((s) => ref({code: s.doc_code, revision: s.revision, clause_no: s.clause_no})).join(", ")}</div>`;
+  if (r.eslesen_roller.length) h += `<div class="meta" style="margin-top:6px">Rol eşleşmesi: ` + r.eslesen_roller.map((m) =>
+    m.rol ? `${esc(m.girdi)} → <b>${esc(m.rol)}</b> (${esc(m.yontem)})` : `${esc(m.girdi)} → ? ${m.oneriler.length ? "öneri: " + m.oneriler.map((o) => esc(o.ad)).join(", ") : "(sistemde yok)"}`).join(" · ") + `</div>`;
+  if (r.atilan_kaynak) h += `<div class="meta">${r.atilan_kaynak} kaynak, alıntısı doğrulanamadığı için gösterilmedi.</div>`;
+  return h;
+}
+
+$("dec-out").addEventListener("click", async (e) => {
+  const f = e.target.closest("button[data-f]");
+  if (f) { decFilter = f.dataset.f; renderDecisions(decState.meta, decState.total, decState.done); return; }
+  if (e.target.closest("#dec-xlsx")) { downloadDecisions(); return; }
+  if (e.target.closest(".ref")) return;
+  const tr = e.target.closest("tr.dec-row"); if (tr) $("dec-d-" + tr.dataset.i).classList.toggle("hidden");
+});
+async function downloadDecisions() {
+  const btn = $("dec-xlsx"); btn.disabled = true;
+  try {
+    const r = await decPost({format: "xlsx"}, {results: JSON.stringify(decRows)});
+    const url = URL.createObjectURL(await r.blob()), a = document.createElement("a");
+    a.href = url; a.download = decFile.name.replace(/\.[^.]+$/, "") + "_kontrol.xlsx"; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (err) { fail("dec-out", err); } finally { btn.disabled = false; }
+}
 
 async function init() {
   try {

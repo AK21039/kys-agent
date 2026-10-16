@@ -6,6 +6,8 @@ Yollar KYS_BASE_PATH altındadır (varsayılan /qa → paktenops.com/qa):
     GET  /qa/app/              AI Studio web uygulaması (yalnızca KYS_WEB_DIR / web-dist varsa; token istemez)
     GET  /qa/api/health        durum (kimlik doğrulamasız)
     GET  /qa/api/stats | documents | documents/{code} | search?q= | references
+    POST /qa/api/decisions/check  multipart `file` (xlsx/csv karar matrisi) → satır başına kaynaklı kontrol (JSON);
+                               ?format=xlsx Excel döner; ?offset=&limit= parça parça işleme; `results` alanı ile yalnızca Excel üretimi
     POST /qa/api/ask           {"question": "..."} → kaynaklı cevap (KYS_MODEL_QUERY model zinciri; cevapta `model`)
                                İsteğe bağlı BYOK başlıkları: X-LLM-Provider (gemini|anthropic) + X-LLM-Key.
                                Zincir tükenirse 503 {"detail": ..., "code": "MODEL_YOK"}
@@ -15,14 +17,16 @@ Yollar KYS_BASE_PATH altındadır (varsayılan /qa → paktenops.com/qa):
 """
 
 import hmac
+import json
 import logging
 import sqlite3
 import urllib.request
 from contextlib import asynccontextmanager, closing
 from importlib import resources
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
@@ -30,7 +34,7 @@ from pydantic import BaseModel
 
 from .. import config, db
 from ..llm import LLMError, LLMUnavailable
-from ..process import flow
+from ..process import decisions, flow, matrix_io
 from ..query import assistant, catalog, pages
 from .mcp_server import build_server
 
@@ -238,6 +242,50 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
             return assistant.ask(c, body.question[:2000], byok=byok)
         except LLMUnavailable as e:
             # Hata metni anahtarı içermez (llm.structured maskeler); yine de BYOK anahtarı ayrıca temizlenir.
+            detail = str(e).replace(byok[1], "***") if byok else str(e)
+            log.warning("Model zinciri tükendi: %s", detail)
+            return JSONResponse(status_code=503, content={
+                "detail": "Model şu an kullanılamıyor: " + detail, "code": "MODEL_YOK"})
+        except LLMError as e:
+            raise HTTPException(502, f"Model cevap veremedi: {e}") from e
+
+    @app.post(f"{base}/api/decisions/check", dependencies=guarded)
+    def decisions_check(file: UploadFile = File(...), format: str = Query("json", pattern="^(json|xlsx)$"),
+                        offset: int = Query(0, ge=0), limit: int | None = Query(None, ge=1, le=decisions.MAX_ROWS),
+                        results: str | None = Form(None), c: sqlite3.Connection = Depends(conn),
+                        provider: str | None = Header(None, alias="X-LLM-Provider"),
+                        key: str | None = Header(None, alias="X-LLM-Key")):
+        """Karar matrisi (xlsx/csv) → her karar için kaynaklı kontrol. Dosya saklanmaz.
+
+        `offset`/`limit` ile satırlar parça parça işlenebilir (uzun istek zaman aşımını önler). `format=xlsx` ile Excel döner;
+        `results` (önceden alınmış satır sonuçları JSON listesi) verilirse LLM çağrısı yapılmaz, yalnızca Excel üretilir."""
+        data = file.file.read(decisions.MAX_FILE_BYTES + 1)
+        filename = file.filename or "matris.xlsx"
+        xlsx_headers = {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(Path(filename).stem + "_kontrol.xlsx")}
+        xlsx_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        byok = None
+        try:
+            if results is not None:
+                try:
+                    given = json.loads(results)
+                except ValueError as e:
+                    raise HTTPException(400, "results geçerli bir JSON değil") from e
+                if not isinstance(given, list):
+                    raise HTTPException(400, "results bir satır listesi olmalı")
+                return Response(decisions.render_results(data, filename, given), media_type=xlsx_type, headers=xlsx_headers)
+            if provider or key:
+                provider = (provider or "").strip().lower()
+                if provider not in config.BYOK_PROVIDERS or not (key or "").strip():
+                    raise HTTPException(400, "X-LLM-Provider (" + "|".join(config.BYOK_PROVIDERS) + ") ve X-LLM-Key birlikte verilmeli")
+                byok = (provider, key.strip())
+            res = decisions.analyze_matrix(c, data, filename, byok=byok, offset=offset, limit=limit)
+            if format == "xlsx":
+                return Response(matrix_io.render_xlsx(res.parsed, res.rows, res.summary), media_type=xlsx_type,
+                                headers=xlsx_headers)
+            return res.to_json() | {"aralik": {"baslangic": offset, "adet": len(res.rows), "toplam": res.summary["toplam_satir"]}}
+        except decisions.MatrixError as e:
+            raise HTTPException(413 if "en çok" in str(e) else 422, str(e)) from e
+        except LLMUnavailable as e:
             detail = str(e).replace(byok[1], "***") if byok else str(e)
             log.warning("Model zinciri tükendi: %s", detail)
             return JSONResponse(status_code=503, content={

@@ -8,6 +8,7 @@ from mcp.server.mcpserver import MCPServer
 
 from .. import db
 from ..config import settings as _boot_settings
+from ..process import decisions
 from ..query import catalog
 
 INSTRUCTIONS = (
@@ -58,5 +59,16 @@ def build_server(db_path=None) -> MCPServer:
     def get_process_flow(code: str) -> dict:
         with closing(conn()) as c:
             return catalog.get_process_flow(c, code) or {"error": f"Süreç bulunamadı: {code}"}
+
+    @server.tool(description="Tek bir karar satırını KYS dokümanlarına karşı kontrol eder: dayanak maddesini (doküman kodu, "
+                             "madde, birebir alıntı) bulur; yetkili/onaylayan rol, limit ve süre uyumunu denetler. Durum: "
+                             "KAYNAKLI, CELISKI, KISMI, KAYNAK_YOK. limit birimli yazılmalı: '100.000 TL'.")
+    def check_decision(karar: str, yetkili: str | None = None, onaylayan: str | None = None,
+                       limit: str | None = None) -> dict:
+        with closing(conn()) as c:
+            try:
+                return decisions.check_single(c, karar, yetkili=yetkili, onaylayan=onaylayan, limit=limit)
+            except decisions.MatrixError as e:
+                return {"error": str(e)}
 
     return server

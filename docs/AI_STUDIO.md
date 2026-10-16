@@ -47,3 +47,47 @@ Bitince README.md'ye çalıştırma adımlarını ve API_BASE ayarını yaz.
 - Süreçler ekranında Mermaid düğümüne tıklayınca adım kartını açma ve sayfa vurgulama.
 - "Onay Kuyruğu" ekran taslağı (API hazır olunca: önerilen kuralları onayla/düzelt/reddet).
 - Doküman ayrıntısında "bu dokümana atıf yapanlar" grafiği.
+
+## Karar Matrisi ekranı (API sözleşmesi)
+
+Kullanıcı bir karar matrisi (.xlsx veya .csv; düz tablo ya da RACI) yükler; her karar için KYS dokümanlarındaki
+dayanak (doküman kodu, madde, birebir alıntı) ve rol/limit/süre uyumu gösterilir. İş mantığı sunucudadır; istemci yalnızca
+yükler ve sonucu çizer. Sunucu dosyayı saklamaz.
+
+```
+POST {API_BASE}/api/decisions/check            (multipart/form-data, alan adı: file)
+  Başlık:  Authorization: Bearer <token>
+           X-LLM-Provider: gemini|anthropic + X-LLM-Key: <anahtar>   (isteğe bağlı BYOK; yalnızca 503 MODEL_YOK sonrası iste)
+  Sorgu:   offset=0&limit=12     satırları parça parça işle (uzun istek zaman aşımına uğramasın; önerilen limit 8-12)
+           format=json (varsayılan) | xlsx   (xlsx: orijinal dosya + sonuç kolonları + "Karar Kontrol Özeti" sayfası)
+  Form:    results=<JSON satır listesi>   (yalnızca format=xlsx ile: önceki parçalardan toplanan satırlar; LLM çağrısı yapılmaz,
+           sadece Excel üretilir)
+  Sınırlar: dosya <= 5 MB, <= 300 karar satırı (aşılırsa 413), okunamayan dosya/başlık yok 422, model zinciri tükendi
+           503 {code:"MODEL_YOK"} (BYOK formunu aç), 401 token.
+```
+
+Yanıt (JSON):
+
+```
+{ "ozet": {toplam_satir, kontrol_edilen, durum:{KAYNAKLI,CELISKI,KISMI,KAYNAK_YOK}, dogrulanmamis, atilan_kaynak, modeller},
+  "matris": {bicim:"duz"|"raci", sayfa, baslik_satiri, kolon_eslesmesi, raci_rol_kolonlari, harf_anlamlari, atlanan_satir, uyarilar[]},
+  "aralik": {baslangic, adet, toplam},
+  "satirlar": [{
+     satir, no, bolum, karar,
+     durum: "KAYNAKLI"|"CELISKI"|"KISMI"|"KAYNAK_YOK",
+     aciklama,
+     kaynaklar: [{doc_code, revision, title, clause_no, quote, tur:"BOLUM"|"KURAL"|"ADIM", dogrulanmamis, dogrulama, iliski, ...}],
+     ilgili: [...],                     // konuyla ilgili ama dayanak olmayan maddeler
+     celiskiler: [{alan:"ONAYLAYAN"|"HAZIRLAYAN"|"LIMIT"|"SURE", matris, dokuman, kaynak}],
+     dogrulanan_alanlar[], dogrulanamayan_alanlar[],
+     dogrulanmamis: bool,               // onaysız (ONERILDI) kurala dayanıyorsa true -> "doğrulanmamış kaynak" etiketi göster
+     eslesen_roller: [{girdi, rol, yontem, skor, oneriler:[{ad,skor}], alan}],
+     atilan_kaynak, uyarilar[], model }] }
+```
+
+Ekran davranışı: dosya seç -> ilk istek `offset=0&limit=12`, yanıttaki `aralik.toplam` bitene kadar `offset` artırarak
+devam et; ilerleme çubuğu (işlenen/toplam) ve geçen süre göster. Sonuç tablosu: Satır, Karar, Durum rozeti
+(KAYNAKLI yeşil, CELISKI kırmızı, KISMI sarı, KAYNAK_YOK gri), Kaynak (kod + madde). Satıra tıklayınca açıklama, alıntılar,
+çelişki ayrıntısı (alan: matriste X, dokümanda Y), rol eşleşmeleri ve uyarılar açılır; `dogrulanmamis` olan kaynaklara
+"doğrulanmamış kaynak" etiketi koy. "Excel indir": aynı dosya + `results` (toplanan tüm satırlar) ile `format=xlsx` isteği, yanıtı blob olarak indir.
+Tek satırlık kontrol MCP aracı: `check_decision(karar, yetkili?, onaylayan?, limit?)`.

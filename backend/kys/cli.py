@@ -428,6 +428,43 @@ def cmd_extract_import(args) -> None:
           f"{totals['atilan']} kanıtsız öğe atıldı.")
 
 
+def cmd_karar_kontrol(args) -> None:
+    from .llm import LLMError
+    from .process import decisions
+    src = Path(args.file)
+    if not src.is_file():
+        sys.exit(f"Dosya yok: {src}")
+    conn = db.connect(readonly=True) if settings.db_path.exists() else _conn()
+
+    def progress(done, total):
+        print(f"\r  {done}/{total} satır", end="", file=sys.stderr, flush=True)
+
+    try:
+        res = decisions.analyze_matrix(conn, src.read_bytes(), src.name, limit=args.limit, progress=progress)
+    except decisions.MatrixError as e:
+        sys.exit(f"Matris okunamadı: {e}")
+    except LLMError as e:
+        sys.exit(f"\nModel cevap veremedi: {e}")
+    print(file=sys.stderr)
+    out = Path(args.out) if args.out else src.with_name(src.stem + "_kontrol.xlsx")
+    from .process import matrix_io
+    out.write_bytes(matrix_io.render_xlsx(res.parsed, res.rows, res.summary))
+    if args.json:
+        Path(args.json).write_text(json.dumps(res.to_json(), ensure_ascii=False, indent=2), encoding="utf-8")
+    meta = res.parsed.meta()
+    print(f"Biçim: {meta['bicim']} · sayfa: {meta['sayfa'] or '-'} · başlık satırı: {meta['baslik_satiri']} · "
+          f"atlanan satır: {meta['atlanan_satir']}")
+    for w in meta["uyarilar"]:
+        print(f"  ! {w}")
+    for r in res.rows:
+        srcs = "; ".join(f"{s['doc_code']} md.{s['clause_no'] or '-'}" for s in r["kaynaklar"]) or "-"
+        flag = " [doğrulanmamış]" if r["dogrulanmamis"] else ""
+        print(f"{r['satir']:>4}  {r['durum']:<10} {r['karar'][:48]:<48}  {srcs}{flag}")
+    print("\nÖzet:",", ".join(f"{k}={v}" for k, v in res.summary["durum"].items()),
+          f"· doğrulanmamış={res.summary['dogrulanmamis']} · atılan kaynak={res.summary['atilan_kaynak']}")
+    print(f"Excel: {out}")
+
+
 def cmd_stats(args) -> None:
     conn = _conn()
     for r in conn.execute(
@@ -526,6 +563,12 @@ def main(argv=None) -> None:
     s = sub.add_parser("scheduled", help="zamanlanmış iş: yükle + sınıflandır, log dosyasına yaz")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn=cmd_scheduled)
+    s = sub.add_parser("karar-kontrol", help="karar matrisini (xlsx/csv) KYS dokümanlarına karşı kaynaklı kontrol et")
+    s.add_argument("file")
+    s.add_argument("--out", help="sonuç Excel dosyası (varsayılan: <dosya>_kontrol.xlsx)")
+    s.add_argument("--json", help="sonuçları JSON olarak da yaz")
+    s.add_argument("--limit", type=int, help="yalnızca ilk N karar satırını işle")
+    s.set_defaults(fn=cmd_karar_kontrol)
     sub.add_parser("stats", help="LLM kullanım istatistikleri").set_defaults(fn=cmd_stats)
     args = p.parse_args(argv)
     args.fn(args)
