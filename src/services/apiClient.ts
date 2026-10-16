@@ -12,6 +12,44 @@ import {
 
 const STORAGE_KEY_API_BASE = 'kys_api_base';
 const STORAGE_KEY_TOKEN = 'kys_token';
+const STORAGE_KEY_LLM_PROVIDER = 'kys_llm_provider';
+const STORAGE_KEY_LLM_KEY = 'kys_llm_key';
+
+export interface LlmSessionConfig {
+  provider: 'gemini' | 'anthropic';
+  key: string;
+}
+
+export const getLlmSessionConfig = (): LlmSessionConfig | null => {
+  try {
+    const provider = sessionStorage.getItem(STORAGE_KEY_LLM_PROVIDER);
+    const key = sessionStorage.getItem(STORAGE_KEY_LLM_KEY);
+    if (provider && (provider === 'gemini' || provider === 'anthropic') && key && key.trim()) {
+      return { provider: provider as 'gemini' | 'anthropic', key: key.trim() };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
+export const setLlmSessionConfig = (provider: 'gemini' | 'anthropic', key: string): void => {
+  try {
+    sessionStorage.setItem(STORAGE_KEY_LLM_PROVIDER, provider);
+    sessionStorage.setItem(STORAGE_KEY_LLM_KEY, key.trim());
+  } catch {
+    // ignore
+  }
+};
+
+export const clearLlmSessionConfig = (): void => {
+  try {
+    sessionStorage.removeItem(STORAGE_KEY_LLM_PROVIDER);
+    sessionStorage.removeItem(STORAGE_KEY_LLM_KEY);
+  } catch {
+    // ignore
+  }
+};
 
 type UnauthorizedListener = () => void;
 const unauthorizedListeners: Set<UnauthorizedListener> = new Set();
@@ -183,17 +221,65 @@ export const kysApi = {
     return res.json();
   },
 
+  getLlmSessionConfig,
+  setLlmSessionConfig,
+  clearLlmSessionConfig,
+
   async ask(question: string): Promise<AskResponse> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    // 1. Varsayılan akışta X-LLM-* başlıkları eklenmez. Yalnızca sessionStorage'da kullanıcı anahtarı varsa ekle.
+    const sessionLlm = getLlmSessionConfig();
+    if (sessionLlm?.provider && sessionLlm?.key) {
+      headers['X-LLM-Provider'] = sessionLlm.provider;
+      headers['X-LLM-Key'] = sessionLlm.key;
+    }
+
     const res = await fetchWithAuth('/api/ask', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ question }),
     });
+
     if (!res.ok) {
-      throw new Error(`Soru yanıtlama başarısız (${res.status})`);
+      // 2. HTTP 503 ve gövdede üst düzey alan {"detail": "...", "code": "MODEL_YOK"}
+      if (res.status === 503) {
+        let errorData: any = null;
+        try {
+          errorData = await res.json();
+        } catch {
+          // ignore parse error
+        }
+
+        if (errorData && errorData.code === 'MODEL_YOK') {
+          const detailMsg = typeof errorData.detail === 'string'
+            ? errorData.detail
+            : 'Kullanılabilir LLM modeli bulunamadı.';
+          const modelYokError = new Error(detailMsg);
+          (modelYokError as any).isModelYok = true;
+          (modelYokError as any).code = 'MODEL_YOK';
+          (modelYokError as any).detail = detailMsg;
+          throw modelYokError;
+        }
+      }
+
+      // Diğer hatalar (400, 404, 500 vb.)
+      let errorMsg = `Soru yanıtlama başarısız (${res.status})`;
+      try {
+        const errorJson = await res.json();
+        if (errorJson && errorJson.detail) {
+          errorMsg = typeof errorJson.detail === 'string'
+            ? errorJson.detail
+            : JSON.stringify(errorJson.detail);
+        }
+      } catch {
+        // ignore parse error
+      }
+      throw new Error(errorMsg);
     }
+
     return res.json();
   },
 };

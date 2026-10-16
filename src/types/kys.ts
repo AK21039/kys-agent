@@ -126,4 +126,10 @@ export interface AskResponse {
   answer: string;
   yeterli_bilgi: boolean;
   citations: Citation[];
+  model?: string;
+}
+
+export interface ModelYokErrorResponse {
+  detail: string;
+  code: 'MODEL_YOK';
 }
