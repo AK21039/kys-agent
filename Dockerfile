@@ -10,12 +10,21 @@ COPY backend/pyproject.toml backend/
 COPY backend/kys backend/kys
 RUN pip install "./backend[server]"
 
+# Web uygulaması (infra/build_web.py → web-dist.zip) varsa /app/web içine açılır; yoksa build kırılmaz.
+# `web-dis[t].zip` deseni dosya yoksa da pyproject ile eşleştiği için COPY hata vermez.
+COPY backend/pyproject.toml web-dis[t].zip /tmp/webin/
+RUN mkdir -p /app/web \
+    && if [ -f /tmp/webin/web-dist.zip ]; then \
+         python -c "import zipfile; zipfile.ZipFile('/tmp/webin/web-dist.zip').extractall('/app/web')"; fi \
+    && rm -rf /tmp/webin
+
 RUN useradd --create-home kys && mkdir -p /data && chown kys /data
 USER kys
 
 ENV KYS_DB_PATH=/data/kys.db \
     KYS_OVERRIDES_PATH=/data/kys_overrides.json \
     KYS_BASE_PATH=/qa \
+    KYS_WEB_DIR=/app/web \
     PORT=8080
 EXPOSE 8080
 VOLUME /data

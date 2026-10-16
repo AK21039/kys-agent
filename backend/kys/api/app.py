@@ -3,6 +3,7 @@
 Salt okunur çalışır: veritabanı ofiste üretilir (`kys publish`), konteynere bağlanır veya KYS_DB_URL'den indirilir.
 Yollar KYS_BASE_PATH altındadır (varsayılan /qa → paktenops.com/qa):
     GET  /qa/                  web sayfası
+    GET  /qa/app/              AI Studio web uygulaması (yalnızca KYS_WEB_DIR / web-dist varsa; token istemez)
     GET  /qa/api/health        durum (kimlik doğrulamasız)
     GET  /qa/api/stats | documents | documents/{code} | search?q= | references
     POST /qa/api/ask           {"question": "..."} → kaynaklı cevap (KYS_MODEL_QUERY model zinciri; cevapta `model`)
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 
@@ -77,6 +78,49 @@ class _TokenGuard:
         await self.app(scope, receive, send)
 
 
+# Web uygulaması API adresi ayarlanmamışsa (localStorage kys_api_base boş) bulunduğu yolun üstünü kullanır:
+# https://host/qa/app/ → https://host/qa (paktenops.com/qa proxy'sinde de çalışır). Kullanıcı değer girdiyse dokunmaz.
+_API_BASE_SCRIPT = (
+    "<script>try{if(!localStorage.getItem('kys_api_base')){localStorage.setItem('kys_api_base',"
+    r"location.origin+location.pathname.replace(/\/app(\/.*)?$/,''));}}catch(e){}</script>"
+)
+
+
+def find_web_dir(configured: Path | None) -> Path | None:
+    """Derlenmiş web uygulaması klasörü: KYS_WEB_DIR, yoksa /app/web, yoksa yerel web-dist (build_web.py çıktısı)."""
+    for cand in (configured, Path("/app/web"), config.LOCAL_HOME / "web-dist"):
+        if cand and (cand / "index.html").is_file():
+            return cand
+    return None
+
+
+def _add_web_routes(app: FastAPI, base: str, web_dir: Path) -> None:
+    """{base}/app altında statik web uygulaması + SPA geri dönüşü. Token istemez (veri API'den token'la gelir)."""
+    index_html = (web_dir / "index.html").read_text(encoding="utf-8")
+    head = index_html.lower().find("<head>")
+    page = (index_html[:head + 6] + _API_BASE_SCRIPT + index_html[head + 6:]) if head >= 0 else _API_BASE_SCRIPT + index_html
+    no_cache = {"Cache-Control": "no-cache"}
+
+    @app.get(f"{base}/app", include_in_schema=False)
+    def app_redirect():
+        return RedirectResponse(f"{base}/app/")
+
+    @app.get(f"{base}/app/", include_in_schema=False)
+    def app_index():
+        return HTMLResponse(page, headers=no_cache)
+
+    @app.get(f"{base}/app/{{path:path}}", include_in_schema=False)
+    def app_file(path: str):
+        f = (web_dir / path).resolve()
+        if f.is_file() and f.is_relative_to(web_dir) and f.name != "index.html":
+            immutable = path.startswith("assets/")
+            return FileResponse(f, headers={"Cache-Control": "public, max-age=31536000, immutable" if immutable
+                                            else "public, max-age=3600"})
+        if "." in path.rsplit("/", 1)[-1]:  # eksik dosya (js/css/png...) index.html olarak dönmesin
+            raise HTTPException(404, "Dosya yok")
+        return HTMLResponse(page, headers=no_cache)  # SPA geri dönüşü
+
+
 def create_app(db_path: Path | str | None = None) -> FastAPI:
     s = config.settings
     db_path = Path(db_path or s.db_path)
@@ -125,6 +169,10 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     @app.get(f"{base}/", response_class=HTMLResponse, include_in_schema=False)
     def index():
         return resources.files("kys").joinpath("api/static/index.html").read_text(encoding="utf-8")
+
+    web_dir = find_web_dir(s.web_dir)
+    if web_dir:
+        _add_web_routes(app, base, web_dir.resolve())
 
     @app.get(f"{base}/api/health")
     def health():

@@ -70,6 +70,7 @@ class Settings:
     run_service: str = "kys-qa"     # yüklemeden sonra yeni revizyonu başlatılacak Cloud Run servisi
     run_region: str = "europe-west1"
     files_dir: Path | None = None   # orijinal dosyaların bulunabileceği ek klasör (dosya adıyla aranır)
+    web_dir: Path | None = None     # KYS_WEB_DIR: derlenmiş web uygulaması (infra/build_web.py → web-dist); {base}/app altında sunulur
 
 
 def _resolve(path: str) -> Path:
@@ -102,4 +103,5 @@ settings = Settings(
     run_service=os.getenv("KYS_RUN_SERVICE", "kys-qa"),
     run_region=os.getenv("KYS_RUN_REGION", "europe-west1"),
     files_dir=_resolve(os.environ["KYS_FILES_DIR"]) if os.getenv("KYS_FILES_DIR") else None,
+    web_dir=_resolve(os.environ["KYS_WEB_DIR"]) if os.getenv("KYS_WEB_DIR") else None,
 )

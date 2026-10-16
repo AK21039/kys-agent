@@ -127,6 +127,32 @@ Zamanlanmış görev: `KYS_PUBLISH_BUCKET=gs://...` tanımlıysa `kys scheduled`
 yayın+yüklemeyi yapar. Hata olursa yalnızca zamanlı görev loguna yazılır, görev düşmez.
 `KYS_RUN_SERVICE` / `KYS_RUN_REGION` varsayılanları `kys-qa` / `europe-west1`.
 
+## Web uygulaması (`/qa/app/`)
+
+AI Studio'nun React/Vite istemcisi (`origin/ai` dalı, main'e merge edilmez) aynı Cloud Run servisinde `/qa/app/`
+altında yayınlanır. Uygulama yalnızca `/qa/api/*` REST API'sini kullanır; statik dosyalar token istemez, veri token'la gelir.
+
+- `/qa/` eski sade sayfa olarak kalır. Web klasörü yoksa `/qa/app` rotası hiç eklenmez, servis eskisi gibi çalışır.
+- API adresi ayarlanmamışsa (`localStorage.kys_api_base` boşsa) sunucu `index.html`'e küçük bir script ekler ve adresi
+  bulunduğu yoldan türetir (`https://<host>/qa/app/` → `https://<host>/qa`); `paktenops.com/qa` proxy'sinde de çalışır.
+  Kullanıcı başka adres girdiyse dokunulmaz.
+- `KYS_WEB_DIR` (imajda `/app/web`; yerelde yoksa `%LOCALAPPDATA%\kys-agent\web-dist`) sunulacak klasördür.
+  `assets/*` bir yıl önbelleklenir, `index.html` `no-cache`'tir.
+
+Güncelleme adımları (depo kökünden):
+
+```powershell
+& "$env:LOCALAPPDATA\kys-agent\.venv\Scripts\python.exe" infra\build_web.py     # origin/ai -> derle -> web-dist.zip
+gcloud run deploy kys-qa --source . --region europe-west1 --project gen-lang-client-0066123286 --quiet
+```
+
+`build_web.py`: `origin/ai`'yi fetch eder, `%LOCALAPPDATA%\kys-agent\web-src` altına ayrık git worktree olarak alır,
+`npm ci` (node ile `npm-cli.js`) + `vite build --base /qa/app/` çalıştırır; çıktıyı yerel `web-dist\` klasörüne ve depo
+kökündeki `web-dist.zip` paketine yazar (içinde `BUILD.txt`: ai commit'i). W: paylaşımı `.js` dosyası yazdırmadığı için
+Cloud Build'e giden paket zip'tir; Dockerfile imajda `/app/web` içine açar. `web-dist.zip` yoksa build yine geçer
+(web uygulaması yayınlanmaz). Yerel deneme: `kys serve --port 8768` → `http://localhost:8768/qa/app/`.
+Doğrulama: `/qa/app/` açılır, `/qa/api/health` 200, tokensız `/qa/api/stats` 401, `/qa/mcp` çalışır.
+
 ## Maliyet ve güvenlik notları
 
 - Sıfıra iner (`min-instances 0`), tek örnek (`max-instances 1`); boştayken işlemci ücreti yok. İlk istekte soğuk

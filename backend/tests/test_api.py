@@ -190,3 +190,59 @@ def test_cors_disabled_by_default_and_enabled_by_origin_list(published, monkeypa
         bad = c.options("/qa/api/ask", headers={**pre, "Origin": "https://kotu.example"})
         assert "access-control-allow-origin" not in bad.headers
         assert c.get("/qa/api/health", headers={"Origin": "https://kotu.example"}).status_code == 200
+
+
+# --- Web uygulaması ({base}/app) ---------------------------------------------------------------------------------
+
+@pytest.fixture
+def web_dir(tmp_path):
+    d = tmp_path / "web"
+    (d / "assets").mkdir(parents=True)
+    (d / "index.html").write_text("<!doctype html><html><head><title>Uygulama</title></head><body>kok</body></html>",
+                                  encoding="utf-8")
+    (d / "assets" / "app-abc123.js").write_text("console.log('x')", encoding="utf-8")
+    (d / "favicon.svg").write_text("<svg/>", encoding="utf-8")
+    return d
+
+
+def test_web_routes_absent_without_web_dir(published, monkeypatch, tmp_path):
+    from kys.api import app as appmod
+    monkeypatch.setattr(appmod, "find_web_dir", lambda configured: None)
+    with _client(monkeypatch, published, web_dir=tmp_path / "yok") as c:
+        assert c.get("/qa/app/").status_code in (404, 405)  # MCP alt uygulamasına düşer, uygulama sunulmaz
+        assert "KYS Sorgu" in c.get("/qa/").text            # eski arayüz sağlam
+        assert c.get("/qa/api/health").json()["ok"] is True
+
+
+def test_web_app_served_with_injection_assets_and_spa_fallback(published, monkeypatch, web_dir):
+    with _client(monkeypatch, published, web_dir=web_dir, access_token="GIZLI") as c:  # token açık, statik istemez
+        r = c.get("/qa/app", follow_redirects=False)
+        assert r.status_code in (302, 307) and r.headers["location"] == "/qa/app/"
+
+        r = c.get("/qa/app/")
+        assert r.status_code == 200 and "kok" in r.text
+        assert r.headers["cache-control"] == "no-cache"
+        assert "kys_api_base" in r.text and r.text.index("kys_api_base") < r.text.index("<title>")  # <head> başında
+        assert "location.origin" in r.text and "http" not in r.text.split("<script>")[1].split("</script>")[0]
+
+        a = c.get("/qa/app/assets/app-abc123.js")
+        assert a.status_code == 200 and "immutable" in a.headers["cache-control"]
+        assert c.get("/qa/app/favicon.svg").status_code == 200
+
+        # SPA: bilinmeyen yol index.html; eksik dosya 404; dizin dışına çıkış yok
+        spa = c.get("/qa/app/surecler/PR-04")
+        assert spa.status_code == 200 and "kok" in spa.text and "kys_api_base" in spa.text
+        assert c.get("/qa/app/assets/yok.js").status_code == 404
+        # token statik dosyalar için gerekmez ama API ve MCP için gerekir
+        assert c.get("/qa/api/stats").status_code == 401
+        assert c.post("/qa/mcp", json={}).status_code == 401
+
+
+def test_web_app_does_not_affect_mcp_and_api(published, monkeypatch, web_dir):
+    with _client(monkeypatch, published, web_dir=web_dir, access_token="GIZLI") as c:
+        h = {"Authorization": "Bearer GIZLI"}
+        assert c.get("/qa/api/stats", headers=h).json()["documents"] == 2
+        r = c.post("/qa/mcp", headers={**h, "Accept": "application/json, text/event-stream"},
+                   json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+        assert r.status_code == 200 and "search_documents" in r.text
+        assert "KYS Sorgu" in c.get("/qa/").text
