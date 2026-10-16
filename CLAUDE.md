@@ -1,3 +1,6 @@
+# ⚠️ KESİN KURAL: KULLANICI ONAYI OLMADAN KODLAMA YAPILAMAZ
+> **KULLANICI TALİMATI:** Kullanıcının açık onayı olmadan hiçbir kodlama, dosya değişikliği, dönüştürme veya silme işlemi YAPILAMAZ. Yapılacak her işlem önce detaylıca açıklanacak ve kullanıcının onayı istenecektir. Onay alınmadan tek bir satır kod değiştirilemez.
+
 # KYS Ajan Sistemi — Geliştirici Rehberi
 
 Kalite Yönetim Sistemi dokümanlarını ilişkisel bir bilgi tabanına dönüştüren ve üzerinde uygunluk, yetki ve

@@ -1,0 +1,8 @@
+{
+  "name": "KYS Sorgu",
+  "description": "Kalite Yönetim Sistemi doküman sorgu, arama ve kanıt doğrulamalı asistan uygulaması.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
