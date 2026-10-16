@@ -219,6 +219,32 @@ def test_chain_falls_through_on_503_and_logs_each_attempt(conn, monkeypatch):
     assert "503" in rows[0]["error"]
 
 
+def test_chain_survives_unexpected_error_and_redacts_key(conn, monkeypatch):
+    # Gerçek olay: secret'taki satır sonu geçersiz başlık (ValueError) üretti, 500'e ve anahtarın loglanmasına yol açtı.
+    _chain(monkeypatch, "gemini:m1,gemini:m2", gemini_api_key="g-gizli")
+
+    def urlopen(req, timeout):
+        if json.loads(req.data)["model"] == "m1":
+            raise ValueError(f"Invalid header value {req.get_header('Authorization')!r}")
+        return _openai_reply('{"value": "ok"}')
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    out = llm.structured(purpose="sorgu", tier="query", system="S", user="U", schema=Out, conn=conn)
+    assert out.value == "ok"
+    err = conn.execute("SELECT error FROM llm_calls WHERE ok = 0").fetchone()["error"]
+    assert "ValueError" in err and "g-gizli" not in err
+
+
+def test_api_keys_are_stripped(monkeypatch):
+    import importlib
+    from kys import config
+    monkeypatch.setenv("GEMINI_API_KEY", "g-anahtar\r\n")
+    try:
+        assert importlib.reload(config).settings.gemini_api_key == "g-anahtar"
+    finally:
+        monkeypatch.delenv("GEMINI_API_KEY")
+        importlib.reload(config)
+
+
 def test_chain_skips_provider_without_key_and_permanent_errors(conn, monkeypatch):
     _chain(monkeypatch, "gemini:m1,openai:x,anthropic:h", gemini_api_key="", openai_base_url="https://o.ai/v1")
 

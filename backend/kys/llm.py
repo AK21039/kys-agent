@@ -110,7 +110,7 @@ def structured(
     chain = chain_for(tier)
     api_key = None
     if byok:
-        provider, api_key = byok
+        provider, api_key = byok[0], byok[1].strip()
         chain = tuple(m for m in chain if m.provider == provider)
         if not chain:
             raise LLMUnavailable(f"{purpose}: zincirde '{provider}' sağlayıcısına ait model yok")
@@ -120,8 +120,10 @@ def structured(
         kwargs = {"api_key": api_key} if api_key and spec.provider in ("gemini", "anthropic") else {}
         try:
             out, usage, stop = call(spec.model, system, user, schema, max_tokens, effort, **kwargs)
-        except LLMError as e:
+        except Exception as e:  # beklenmeyen hata da (ör. geçersiz başlık) zinciri kesmez, sıradakine geçilir
             msg = _redact(str(e), api_key, settings.gemini_api_key, settings.openai_api_key)
+            if not isinstance(e, LLMError):
+                msg = f"{type(e).__name__}: {msg}"
             status = getattr(e, "status", None)
             kind = "kalıcı hata" if status in (400, 401, 403) else "geçici/diğer hata"
             log.warning("%s: %s düştü (%s%s): %s", purpose, spec, kind, f" HTTP {status}" if status else "", msg)
