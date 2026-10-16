@@ -155,3 +155,10 @@ class CandidateKind(StrEnum):
     BOLUM = "BOLUM"
     KURAL = "KURAL"
     ADIM = "ADIM"
+
+
+class DocCheck(StrEnum):
+    """Matristeki "İlgili Doküman" hücresinin kontrol sonucu."""
+    DOGRULANDI = "DOGRULANDI"            # dayanak bu dokümanda bulundu
+    DESTEKLEMIYOR = "DESTEKLEMIYOR"      # doküman sistemde var ama dayanak başka dokümanda
+    SISTEMDE_YOK = "SISTEMDE_YOK"        # doküman veritabanında yok

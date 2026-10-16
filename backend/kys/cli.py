@@ -459,9 +459,15 @@ def cmd_karar_kontrol(args) -> None:
     for r in res.rows:
         srcs = "; ".join(f"{s['doc_code']} md.{s['clause_no'] or '-'}" for s in r["kaynaklar"]) or "-"
         flag = " [doğrulanmamış]" if r["dogrulanmamis"] else ""
-        print(f"{r['satir']:>4}  {r['durum']:<10} {r['karar'][:48]:<48}  {srcs}{flag}")
+        dk = f" | doküman: {r['dokuman_kontrolu']}" if r.get("dokuman_kontrolu") else ""
+        print(f"{(r.get('sayfa') or '-')[:14]:<14} {r['satir']:>4}  {r['durum']:<10} {r['karar'][:44]:<44}  {srcs}{flag}{dk}")
     print("\nÖzet:",", ".join(f"{k}={v}" for k, v in res.summary["durum"].items()),
           f"· doğrulanmamış={res.summary['dogrulanmamis']} · atılan kaynak={res.summary['atilan_kaynak']}")
+    for sh, counts in res.summary["sayfalar"].items():
+        print(f"  {sh}: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+    print("Matristeki doküman:", ", ".join(f"{k}={v}" for k, v in res.summary["dokuman_kontrolu"].items()))
+    if res.summary["sistemde_yok_dokumanlar"]:
+        print("Sistemde olmayan dokümanlar:", ", ".join(res.summary["sistemde_yok_dokumanlar"]))
     print(f"Excel: {out}")
 
 

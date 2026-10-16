@@ -396,15 +396,15 @@ function renderDecisions(meta, total, done) {
     (decFilter ? `<button type="button" data-f="">Tümü</button>` : "") +
     (done ? `<button type="button" id="dec-xlsx" style="margin-left:auto">Excel indir</button>` : "") + `</div>`;
   h += `<div class="meta">Biçim: ${meta.bicim === "raci" ? "RACI" : "düz tablo"}${meta.sayfa ? " · sayfa: " + esc(meta.sayfa) : ""} · başlık satırı ${meta.baslik_satiri}` +
-    ` · atlanan satır ${meta.atlanan_satir}${unv ? ` · <b>${unv}</b> satır doğrulanmamış (onaysız kural) kaynağa dayanıyor` : ""}</div>`;
+    `${(meta.sayfalar || []).length > 1 ? " · " + meta.sayfalar.length + " sayfa" : ""} · atlanan satır ${meta.atlanan_satir}${unv ? ` · <b>${unv}</b> satır doğrulanmamış (onaysız kural) kaynağa dayanıyor` : ""}</div>`;
   if (meta.harf_anlamlari) h += `<div class="meta">Harf anlamları (${meta.harf_kaynagi === "aciklama" ? "sayfadaki açıklamadan" : "varsayılan"}): ${Object.entries(meta.harf_anlamlari).map(([k, v]) => esc(k + "=" + v)).join(", ")}</div>`;
   for (const w of meta.uyarilar || []) h += `<div class="warn" style="margin-top:6px">${esc(w)}</div>`;
-  h += `</div><div class="card"><table><tr><th>Satır</th><th>Karar</th><th>Durum</th><th class="hide-sm">Kaynak</th></tr>`;
+  h += `</div><div class="card"><table><tr><th>Sayfa / Satır</th><th>Karar</th><th>Durum</th><th class="hide-sm">Kaynak</th></tr>`;
   decRows.forEach((r, i) => {
     if (decFilter && r.durum !== decFilter) return;
     const src = r.kaynaklar.map((s) => `${esc(s.doc_code)} md.${esc(s.clause_no || "-")}`).join("<br>") || "-";
-    h += `<tr class="dec-row" data-i="${i}"><td>${r.satir}</td><td>${esc(r.karar)}</td>` +
-      `<td><span class="st st-${esc(r.durum)}">${esc(DEC_LABEL[r.durum] || r.durum)}</span>${r.dogrulanmamis ? '<div class="meta">doğrulanmamış kaynak</div>' : ""}</td>` +
+    h += `<tr class="dec-row" data-i="${i}"><td>${r.sayfa ? esc(r.sayfa) + " · " : ""}${r.satir}</td><td>${esc(r.karar)}</td>` +
+      `<td><span class="st st-${esc(r.durum)}">${esc(DEC_LABEL[r.durum] || r.durum)}</span>${r.dogrulanmamis ? '<div class="meta">doğrulanmamış kaynak</div>' : ""}${r.dokuman_kontrolu ? `<div class="meta">matristeki doküman: ${esc(r.dokuman_kontrolu)}</div>` : ""}</td>` +
       `<td class="hide-sm">${src}</td></tr><tr class="hidden" id="dec-d-${i}"><td></td><td colspan="3">${decDetail(r)}</td></tr>`;
   });
   $("dec-out").innerHTML = h + "</table></div>";
@@ -416,6 +416,9 @@ function decDetail(r) {
     `<b>${esc(c.alan)}</b>: matriste <b>${esc(c.matris)}</b>, dokümanda <b>${esc(c.dokuman)}</b> (${esc(c.kaynak)})`).join("<br>") + `</div>`;
   for (const s of r.kaynaklar) h += `<div class="quote">“${esc(s.quote)}”<div class="meta">${ref({code: s.doc_code, revision: s.revision, clause_no: s.clause_no})} ${esc(s.title)}` +
     `${s.dogrulanmamis ? ' · <b>doğrulanmamış kaynak</b> (onaysız kural/çıkarım)' : ""}${s.iliski === "CELISIR" ? " · kararla çelişiyor" : ""}</div></div>`;
+  if ((r.matris_dokumanlari || []).length) h += `<div class="meta" style="margin-top:6px">Matristeki doküman: ` + r.matris_dokumanlari.map((d) =>
+    `${esc(d.girdi)} → <b>${esc(d.durum)}</b>${d.doc_code ? " (" + esc(d.doc_code) + ")" : ""}`).join(" · ") + `</div>`;
+  if (r.kodsuz_kaynak) h += `<div class="warn" style="margin-top:6px">Kaynak doküman kodsuz/taslak olabilir (doküman no boş).</div>`;
   if (r.ilgili.length) h += `<div class="meta" style="margin-top:6px">İlgili (dayanak değil): ${r.ilgili.map((s) => ref({code: s.doc_code, revision: s.revision, clause_no: s.clause_no})).join(", ")}</div>`;
   if (r.eslesen_roller.length) h += `<div class="meta" style="margin-top:6px">Rol eşleşmesi: ` + r.eslesen_roller.map((m) =>
     m.rol ? `${esc(m.girdi)} → <b>${esc(m.rol)}</b> (${esc(m.yontem)})` : `${esc(m.girdi)} → ? ${m.oneriler.length ? "öneri: " + m.oneriler.map((o) => esc(o.ad)).join(", ") : "(sistemde yok)"}`).join(" · ") + `</div>`;

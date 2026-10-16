@@ -20,3 +20,6 @@ Kurallar:
 - Dokümanlar arasında çelişki görürsen her birini ayrı kaynak olarak seç.
 - En fazla 4 kaynak seç. Hiçbir aday dayanak değilse `kaynaklar` boş olsun ve `ozet`te nedenini kısaca yaz.
 - `aciklama` ve `ozet` kısa, Türkçe, kalite uzmanının diliyle olsun.
+- Satırda "Karar süreci", "Karar tipi", "Birim" ve "Notlar" yalnızca bağlamdır. "Karar verici" bir birim adı olabilir
+  ("Satınalma", "Yatırım ve Bakım"); birden çok karar verici ortak/kademeli onaydır. Dokümandaki rolü olduğu gibi aktar.
+- `matris_dokumani="evet"` işaretli adaylar matrisin kendi başvurduğu dokümandandır; dayanak onlardaysa önce onları seç.

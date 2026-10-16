@@ -25,7 +25,7 @@ _TITLES = set().union(*_TITLE_GROUPS) | {"muhendis", "teknisyen", "uzman", "elem
 # Eksik/fazla olunca rolü değiştiren nitelikler (Genel Müdür ≠ Genel Müdür Yardımcısı)
 _QUALIFIERS = {"yardimci", "yrd", "vekil", "asistan", "kidemli", "bas", "sef", "stajyer", "genel"}
 _ABBREV = {"gm": "genel mudur", "gmy": "genel mudur yardimcisi", "yk": "yonetim kurulu", "ik": "insan kaynaklari",
-           "bt": "bilgi teknolojileri", "kys": "kalite yonetim sistemi"}
+           "ickb": "icra kurulu baskani", "bt": "bilgi teknolojileri", "kys": "kalite yonetim sistemi"}
 _SUFFIXES = ["lerinin", "larinin", "lerine", "larina", "leri", "lari", "ler", "lar", "inin", "unun", "nin", "nun",
              "si", "su", "in", "un", "den", "dan", "de", "da", "ne", "na", "yi", "yu", "i", "u", "e", "a"]
 
@@ -45,7 +45,9 @@ def tokens(name: str) -> list[str]:
         if not w or w in _STOP:
             continue
         for part in (_ABBREV.get(w) or w).split():
-            out.append(_stem(part))
+            st = _stem(part)
+            if st != "uye":                  # "Yönetim Kurulu Üyesi" ≈ "Yönetim Kurulu"
+                out.append(st)
     return out
 
 
@@ -108,6 +110,7 @@ class RoleMatch:
     method: str = "yok"          # tam | takma_ad | kisaltma | bulanik | yok
     score: float = 0.0
     suggestions: list[dict] = field(default_factory=list)   # çözülemeyen ad için [{ad, skor}]
+    is_unit: bool = False        # birim adı (yönetici/direktörüne zorla eşlenmez)
 
     @property
     def resolved(self) -> bool:
@@ -115,7 +118,7 @@ class RoleMatch:
 
     def as_dict(self) -> dict:
         return {"girdi": self.input, "rol": self.canonical, "yontem": self.method, "skor": self.score,
-                "oneriler": self.suggestions}
+                "oneriler": self.suggestions, "birim": self.is_unit}
 
 
 class RoleIndex:
@@ -169,7 +172,41 @@ class RoleIndex:
     def _fill(self, m: RoleMatch, eid: int, method: str, score: float) -> RoleMatch:
         m.entity_id, (m.canonical, m.entity_type) = eid, self.entities[eid]
         m.method, m.score = method, score
+        m.is_unit = m.entity_type == EntityType.BIRIM.value
         return m
+
+    def resolve_decider(self, name: str) -> RoleMatch:
+        """Karar verici hücresi: birim adı ('Yatırım ve Bakım', 'Satınalma') yöneticisine zorla eşlenmez, birim olarak
+        işaretlenir. Tam/takma ad/kısaltma eşleşmesi varsa o rol kullanılır."""
+        m = self.resolve(name)
+        if m.method in ("tam", "takma_ad", "kisaltma"):
+            return m
+        if looks_like_unit(name):
+            return RoleMatch(input=" ".join((name or "").split()), canonical=" ".join((name or "").split()),
+                             entity_type=EntityType.BIRIM.value, method="birim", score=1.0, is_unit=True)
+        return m
+
+
+def domain_tokens(name: str) -> set[str]:
+    """Unvan ve nitelik sözcükleri çıkarılmış alan sözcükleri ('Yatırımlar ve Bakım Direktörü' → {yatirim, bakim})."""
+    return {t for t in tokens(name) if t not in _TITLES and t not in _QUALIFIERS and _title_group(t) is None}
+
+
+def looks_like_unit(name: str) -> bool:
+    toks = tokens(name)
+    return bool(toks) and all(t not in _TITLES and t not in _QUALIFIERS and _title_group(t) is None for t in toks)
+
+
+def _unit_compat(a: RoleMatch, b: RoleMatch) -> bool | None:
+    u, o = (a, b) if a.is_unit else (b, a)
+    udom, odom = domain_tokens(u.canonical or u.input), domain_tokens(o.canonical or o.input)
+    if udom and (udom <= odom or (o.is_unit and odom and odom <= udom)):
+        return True                          # birimin yöneticisi / direktörü / aynı birim
+    if udom & odom:
+        return None                          # kısmi örtüşme (alt birim / aynı işlev grubu): belirsiz, çelişki sayılmaz
+    if o.is_unit:
+        return False if udom and odom else None
+    return False if o.resolved else None
 
 
 def _unit_vs_person(a: str, b: str) -> bool:
@@ -191,6 +228,8 @@ def _unit_vs_person(a: str, b: str) -> bool:
 def same_role(a: RoleMatch, b: RoleMatch) -> bool | None:
     """True: aynı rol · False: farklı roller (ikisi de sistemde tanımlı) · None: karşılaştırılamıyor."""
     na, nb = a.canonical or a.input, b.canonical or b.input
+    if a.is_unit or b.is_unit:
+        return _unit_compat(a, b)
     if _unit_vs_person(na, nb) and score_names(na, nb) < SAME_ROLE_MIN:
         return None
     if a.resolved and b.resolved:

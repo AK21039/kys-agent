@@ -320,8 +320,8 @@ def test_check_matrix_writes_columns_summary_and_keeps_formulas(kb, monkeypatch)
     wb = openpyxl.load_workbook(io.BytesIO(out))
     ws = wb["Karar Matrisi"]
     hdr = [c.value for c in ws[3]]
-    assert hdr[-7:] == matrix_io.OUT_HEADERS
-    first = len(hdr) - 6
+    assert hdr[-len(matrix_io.OUT_HEADERS):] == matrix_io.OUT_HEADERS
+    first = len(hdr) - len(matrix_io.OUT_HEADERS) + 1
     assert ws.cell(5, first).value == "KISMI" and "PR-04 Rev.03" in ws.cell(5, first + 1).value
     assert ws.cell(5, first + 2).value == "4.2" and "Genel Müdür onaylar" in ws.cell(5, first + 3).value
     assert ws["J5"].value == "=1+1"                                   # orijinal formül korunur
@@ -498,3 +498,112 @@ def test_weak_roles_from_unreviewed_fields_never_create_conflict(kb):
 def test_role_must_appear_in_quote_even_with_short_words():
     assert decisions._role_in_quote("İş Güvenliği Uzmanı", "Ancak iş güvenliği uzmanından özel izinle yapılması")
     assert not decisions._role_in_quote("Genel Müdür", "Ancak iş güvenliği uzmanından özel izinle yapılması")
+
+
+# --- gerçek matris biçimi: çok sayfa, Karar Tanımı, birim adı karar verici, İlgili Doküman -------------------------------
+
+def multi_sheet_bytes() -> bytes:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Proje ve Yatırım"
+    ws.append(["Karar Tipi", "Birim", " Karar Süreci", "Karar Tanımı", "Karar Verici", "İlgili Doküman", "Katılımcı/Ortak Brimler", "Notlar"])
+    ws.append(["Stratejik", "Satınalma", "Satınalma Kararları", "Satınalma talebinin onaylanması", "Satınalma/Genel Müdür", "PR-04 4.2", "Finans", None])
+    ws.append(["Taktik", "Satınalma", "Satınalma Kararları", "Tedarikçi değerlendirme", "Satınalma", "PR-99", None, None])
+    ws2 = wb.create_sheet("Üretim")
+    ws2.append(["Karar Tipi", "Birim", " Karar Süreci", "Karar Tanımı", "Karar Verici", "Katılımcı/Ortak Brimler", "Notlar", None])   # kaymış başlık
+    for i in range(3):
+        ws2.append(["Taktik", "Üretim", "Hat", f"Hat başı kontrol {i}", "PR-08 / ProManage", "Üretim", "Planlama", "not"])
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def test_real_layout_headers_and_all_sheets():
+    assert matrix_io.classify_header("Karar Tipi") == "karar_tipi" and matrix_io.classify_header("Karar Türü") == "karar_tipi"
+    assert matrix_io.classify_header("Karar Tanımı") == "karar" and matrix_io.classify_header(" Karar Süreci") == "surec"
+    assert matrix_io.classify_header("Karar Verici") == "verici" and matrix_io.classify_header("Katılımcı/Ortak Brimler") == "katilimci"
+    p = matrix_io.parse_matrix(multi_sheet_bytes(), "m.xlsx")
+    assert [s["sayfa"] for s in p.sheets] == ["Proje ve Yatırım", "Üretim"] and len(p.rows) == 5
+    a = p.rows[0]
+    assert a.karar == "Satınalma talebinin onaylanması" and a.surec == "Satınalma Kararları" and a.karar_tipi == "Stratejik"
+    assert a.birim == "Satınalma" and a.verici == ["Satınalma", "Genel Müdür"] and a.sheet == "Proje ve Yatırım"
+    u = p.rows[2]                                           # Üretim: başlıklar bir kolon kaymış
+    assert u.sheet == "Üretim" and u.dokuman_text == "PR-08 / ProManage" and u.verici == ["Üretim"]
+    assert any("kaymış" in w for w in p.warnings)
+    assert matrix_io.split_deciders("Yatırım ve Bakım-İCKB") == ["Yatırım ve Bakım", "İCKB"]
+    assert matrix_io.split_deciders("Ar-Ge/Satınalma") == ["Arge", "Satınalma"]
+
+
+def test_doc_refs_parse_and_resolve(kb):
+    from kys.process.docrefs import DocResolver, parse_doc_refs
+    refs = parse_doc_refs("PR.AR-01 5.8.2")
+    assert refs[0].code == "PR.AR-01" and refs[0].clause_no == "5.8.2"
+    assert [r.kind for r in parse_doc_refs("PR.UR-01 / PLANLAMA VE ARGE BÖLÜMÜNDE DÖKÜMAN BULUNMAMAKTA / ProManage")] == ["kod"]
+    assert parse_doc_refs("Satin_Alma_Tedarik_Yonetimi_ve_SLA_Proseduru.docx")[0].kind == "dosya"
+    res = DocResolver(kb)
+    r = res.resolve_cell("pr.4 4.2")[0]
+    assert r.resolved and r.doc_code == "PR-04" and r.clause_no == "4.2"
+    assert not res.resolve_cell("PR11-SA-4")[0].resolved
+    kb.execute("UPDATE documents SET file_path = 'x/Satin_Alma_Tedarik_Yonetimi_ve_SLA_Proseduru.docx' WHERE code = 'PR-04'")
+    kb.commit()
+    assert DocResolver(kb).resolve_cell("Satin_Alma_Tedarik_Yonetimi_ve_SLA_Proseduru.docx")[0].doc_code == "PR-04"
+
+
+def test_unit_decider_is_not_forced_to_manager(kb):
+    from kys.process.roles import RoleMatch, same_role
+    idx = RoleIndex(kb)
+    kb.execute("INSERT INTO entities(id, entity_type, canonical_name, normalized_name) VALUES (20, 'ROL', 'Yatırım ve Bakım Direktörü', 'yatirim ve bakim direktoru')")
+    idx = RoleIndex(kb)
+    unit = idx.resolve_decider("Yatırım ve Bakım")
+    assert unit.is_unit and unit.method == "birim" and not unit.resolved           # yöneticisine zorla eşlenmedi
+    assert same_role(unit, RoleMatch(input="Yatırımlar ve Bakım Direktörü")) is True  # aynı birimin direktörü uyumlu
+    assert same_role(unit, idx.resolve("Finans Direktörü")) is False
+    assert idx.resolve_decider("İCKB").method == "kisaltma" or not idx.resolve_decider("İCKB").is_unit
+
+
+def test_joint_deciders_need_each_confirmed(kb):
+    row = _row(onaylayan=[], verici=["Satınalma Müdürü", "Genel Müdür"], limit=None)
+    idx = RoleIndex(kb)
+    roles = {f: [idx.resolve(n) for n in getattr(row, f)] for f in matrix_io.ROLE_FIELDS}
+    roles["authorities"] = [idx.resolve(n) for n in row.authorities]
+    src = _src(idx, onay=["Genel Müdür"])
+    v = decisions.classify(row, roles, [src])
+    assert v["durum"] == DecisionStatus.KISMI and "Ortak/kademeli" in v["aciklama"] and "Satınalma Müdürü" in v["aciklama"]
+    src2 = _src(idx, onay=["Genel Müdür", "Satınalma Müdürü"])
+    assert decisions.classify(row, roles, [src2])["durum"] == DecisionStatus.KAYNAKLI
+
+
+def test_kodsuz_source_is_flagged_in_explanation(kb):
+    idx = RoleIndex(kb)
+    s = _src(idx, doc="KODSUZ-61cc9032", onay=["Finans Direktörü"], quantities=[GM_100K])
+    s.kodsuz = s.untrusted = True
+    v = _classify(kb, _row(), [s])
+    assert v["durum"] == DecisionStatus.CELISKI and "kodsuz/taslak" in v["aciklama"] and "KODSUZ-61cc9032" in v["aciklama"]
+
+
+def test_multi_sheet_end_to_end_doc_check_and_excel(kb, monkeypatch):
+    fake_llm(monkeypatch, [pick()])
+    rows, out = decisions.check_matrix(kb, multi_sheet_bytes(), "m.xlsx")
+    assert [(r["sayfa"], r["satir"]) for r in rows][:3] == [("Proje ve Yatırım", 2), ("Proje ve Yatırım", 3), ("Üretim", 2)]
+    by = {(r["sayfa"], r["satir"]): r for r in rows}
+    r1, r2, r3 = by[("Proje ve Yatırım", 2)], by[("Proje ve Yatırım", 3)], by[("Üretim", 2)]
+    assert r1["dokuman_kontrolu"] == "DOGRULANDI" and r1["matris_dokumanlari"][0]["madde_uyumu"] is True
+    assert r2["dokuman_kontrolu"] == "SISTEMDE_YOK" and "PR-99" in r2["aciklama"]
+    assert r3["dokuman_kontrolu"] == "SISTEMDE_YOK" and r3["matris_dokumanlari"][0]["girdi"] == "PR-08"
+    # karar vericisi birim adı: "Satınalma" birim olarak işaretlendi, "Genel Müdür" dokümanla uyumlu
+    assert any(m["birim"] for m in r1["eslesen_roller"] if m["girdi"] == "Satınalma")
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    assert wb.sheetnames == ["Proje ve Yatırım", "Üretim", "Karar Kontrol Özeti"]
+    for name in ("Proje ve Yatırım", "Üretim"):
+        assert "Matristeki Doküman Kontrolü" in [c.value for c in wb[name][1]]
+    summ = [str(c.value) for row in wb["Karar Kontrol Özeti"].iter_rows() for c in row if c.value is not None]
+    assert "Üretim" in summ and "Proje ve Yatırım" in summ and "PR-08" in " ".join(summ)
+    s = decisions.summarize(rows)
+    assert s["sayfalar"]["Üretim"] and s["dokuman_kontrolu"]["DOGRULANDI"] == 1 and "PR-99" in s["sistemde_yok_dokumanlar"]
+
+
+def test_api_chunks_span_sheets(client, monkeypatch):
+    fake_llm(monkeypatch, [pick()])
+    r1 = _upload(client, data=multi_sheet_bytes(), params={"offset": 1, "limit": 3}).json()
+    assert [(x["sayfa"], x["satir"]) for x in r1["satirlar"]] == [("Proje ve Yatırım", 3), ("Üretim", 2), ("Üretim", 3)]
+    assert r1["aralik"]["toplam"] == 5 and len(r1["matris"]["sayfalar"]) == 2

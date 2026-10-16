@@ -20,12 +20,13 @@ from typing import Callable
 from pydantic import BaseModel, Field
 
 from .. import llm
-from ..ontology import (TRUSTED_REVIEW, CandidateKind, DecisionField, DecisionStatus, ReviewStatus, RuleType,
-                        SourceStance)
+from ..ontology import (TRUSTED_REVIEW, CandidateKind, DecisionField, DecisionStatus, DocCheck, ReviewStatus,
+                        RuleType, SourceStance)
 from ..query import retrieval
 from ..textnorm import fold, fold_chars, verify_quote
 from . import matrix_io
 from .matrix_io import DecisionRow, MatrixError, ParsedMatrix
+from .docrefs import DocRef, DocResolver
 from .quantity import Quantity, canonical_unit, compare, parse_quantities
 from .roles import RoleIndex, RoleMatch, same_role, tokens
 
@@ -69,6 +70,7 @@ class Candidate:
     shown: str                          # modele gösterilen metin
     rule: dict | None = None
     step: dict | None = None
+    matris_dokumani: bool = False       # matristeki "İlgili Doküman" hücresinden çözülen dokümana ait
 
     @property
     def label(self) -> str:
@@ -89,6 +91,7 @@ class Source:
     untrusted: bool = False
     note: str = ""
     verification: str = "birebir"       # 'birebir' | 'kelime' (bkz. _locate)
+    kodsuz: bool = False                # doküman kodu yok (KODSUZ-xxxx): taslak / yeni yüklenmiş olabilir
     weak_roles: bool = False            # roller alıntıdan değil, kural/adım yapısal alanından (yedek) geldi
 
     def as_dict(self) -> dict:
@@ -97,7 +100,7 @@ class Source:
                 "heading": c.heading, "quote": self.quote, "tur": c.kind.value, "section_id": self.section_id,
                 "rule_id": c.rule["id"] if c.rule else None,
                 "review_status": c.rule["review_status"] if c.rule else None,
-                "dogrulanmamis": self.untrusted, "dogrulama": self.verification, "iliski": self.iliski.value,
+                "dogrulanmamis": self.untrusted, "kodsuz": self.kodsuz, "dogrulama": self.verification, "iliski": self.iliski.value,
                 "dokuman_onaylayanlar": [m.canonical or m.input for m in self.approvers],
                 "dokuman_hazirlayanlar": [m.canonical or m.input for m in self.preparers],
                 "nicelikler": [str(q) for q in self.quantities], "aciklama": self.note}
@@ -108,6 +111,7 @@ class Context:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
         self.roles = RoleIndex(conn)
+        self.docs = DocResolver(conn)
         self.rules = [dict(r) | {"blob": fold(" ".join(str(r[k] or "") for k in
                                                        ("statement", "object_text", "condition_text", "action", "quote", "subject")))}
                       for r in conn.execute(
@@ -140,6 +144,9 @@ class Context:
                 (section_id,)).fetchone()
         return self._section_by_id[section_id]
 
+    def doc_row(self, document_id: int) -> dict:
+        return next(d for d in self.docs.docs if d["id"] == document_id)
+
     def body(self, document_id: int) -> str:
         if document_id not in self._bodies:
             r = self.conn.execute("SELECT body_text FROM documents WHERE id = ?", (document_id,)).fetchone()
@@ -168,21 +175,43 @@ def _hits(blob: str, terms: list[str]) -> int:
     return sum(1 for t in terms if t in blob)
 
 
-def gather(ctx: Context, row: DecisionRow, matrix_roles: dict[str, list[RoleMatch]]) -> list[Candidate]:
+def gather(ctx: Context, row: DecisionRow, matrix_roles: dict[str, list[RoleMatch]],
+           refs: list[DocRef] | None = None) -> list[Candidate]:
     """Deterministik aday toplama (LLM yok)."""
-    terms = retrieval._terms(row.karar)
+    context = f"{row.karar} {row.surec}".strip()          # karar süreci karar metnine bağlam olarak eklenir
+    terms = retrieval._terms(context)
     cands: list[Candidate] = []
+    refs = [r for r in (refs or []) if r.resolved][:3]
+    ref_ids = {r.document_id for r in refs}
 
     def add(**kw) -> None:
         cands.append(Candidate(no=len(cands) + 1, **kw))
 
-    # 1) FTS bölümleri: karar metni (+ ilgili doküman hücresi), ardından karar + yetkili rol adları
-    secs = list(retrieval.retrieve_for_question(ctx.conn, f"{row.karar} {row.dokuman_text}".strip(), limit=6))
-    if row.authorities:
-        secs += retrieval.retrieve(ctx.conn, f"{row.karar} {' '.join(row.authorities)}", limit=4)
     seen: set[int] = set()
+    # 0) matristeki "İlgili Doküman": bu dokümanın bölümleri önceliklidir (madde no verilmişse o madde en başta)
+    for ref in refs:
+        secs_d = [x for x in ctx.doc_sections(ref.document_id) if len(x["text"]) > 20]
+
+        def rank(x, ref=ref):
+            clause_hit = bool(ref.clause_no and x["clause_no"] and (x["clause_no"] == ref.clause_no
+                                                                    or x["clause_no"].startswith(ref.clause_no + ".")))
+            return (not clause_hit, -_hits(fold(f"{x['heading'] or ''} {x['text']}"), terms))
+        for x in sorted(secs_d, key=rank)[:5]:
+            if x["id"] in seen:
+                continue
+            seen.add(x["id"])
+            d = ctx.doc_row(ref.document_id)
+            body = f"{x['heading'] or ''}\n{_window(x['text'], terms)}".strip()
+            add(kind=CandidateKind.BOLUM, document_id=ref.document_id, code=d["code"], revision=d["revision"],
+                title=d["title"], section_id=x["id"], clause_no=x["clause_no"], heading=x["heading"], shown=body,
+                matris_dokumani=True)
+    # 1) FTS bölümleri: karar metni, ardından karar + yetkili rol adları
+    secs = list(retrieval.retrieve_for_question(ctx.conn, context, limit=6))
+    if row.authorities:
+        secs += retrieval.retrieve(ctx.conn, f"{context} {' '.join(row.authorities)}", limit=4)
+    base = len(seen)
     for s in secs:
-        if s["section_id"] in seen or len(seen) >= MAX_SECTIONS:
+        if s["section_id"] in seen or len(seen) - base >= MAX_SECTIONS:
             continue
         seen.add(s["section_id"])
         body = f"{s['heading'] or ''}\n{_window(s['text'], terms)}".strip()
@@ -195,30 +224,34 @@ def gather(ctx: Context, row: DecisionRow, matrix_roles: dict[str, list[RoleMatc
         scored = []
         for r in ctx.rules:
             h = _hits(r["blob"], terms)
-            if h < min(2, len(terms)):
+            in_ref = r["document_id"] in ref_ids
+            if h < (1 if in_ref else min(2, len(terms))):
                 continue
             score = h / len(terms) + (0.6 if r["rule_type"] in PRIORITY_RULES else 0.0) \
-                + (0.5 if r["subject_entity_id"] in auth_ids else 0.0)
+                + (0.5 if r["subject_entity_id"] in auth_ids else 0.0) + (1.0 if in_ref else 0.0)
             scored.append((score, r))
-        for _, r in sorted(scored, key=lambda x: -x[0])[:MAX_RULES]:
+        for _, r in sorted(scored, key=lambda x: -x[0])[:MAX_RULES + 2 * len(refs)]:
             th = (f"; eşik: {r['threshold_op'] or ''}{r['threshold_value']:g} {r['threshold_unit'] or ''}"
                   if r["threshold_value"] is not None else "")
             shown = (f"Kural türü: {r['rule_type']}; özne: {r['subject'] or '-'}; eylem: {r['action'] or '-'}; "
                      f"nesne: {r['object_text'] or '-'}; koşul: {r['condition_text'] or '-'}{th}\nAlıntı: {r['quote']}")
             add(kind=CandidateKind.KURAL, document_id=r["document_id"], code=r["code"], revision=r["revision"],
-                title=r["title"], section_id=r["section_id"], clause_no=r["clause_no"], heading=None, shown=shown, rule=r)
+                title=r["title"], section_id=r["section_id"], clause_no=r["clause_no"], heading=None, shown=shown, rule=r,
+                matris_dokumani=r["document_id"] in ref_ids)
         # 3) süreç adımları
         scored = []
         for st in ctx.steps:
             h = _hits(st["blob"], terms)
-            if h >= min(2, len(terms)):
-                scored.append((h / len(terms), st))
+            in_ref = st["document_id"] in ref_ids
+            if h >= (1 if in_ref else min(2, len(terms))):
+                scored.append((h / len(terms) + (1.0 if in_ref else 0.0), st))
         for _, st in sorted(scored, key=lambda x: -x[0])[:MAX_STEPS]:
             dur = f"; süre: {st['duration_value']:g} {st['duration_unit'] or ''}" if st["duration_value"] is not None else ""
             shown = (f"Süreç {st['pcode']} '{st['pname']}', adım {st['seq']}: {st['name']}. "
                      f"Sorumlu: {st['responsible'] or '-'}; onaycı: {st['approver'] or '-'}{dur}\nAlıntı: {st['quote']}")
             add(kind=CandidateKind.ADIM, document_id=st["document_id"], code=st["code"], revision=st["revision"],
-                title=st["title"], section_id=None, clause_no=None, heading=None, shown=shown, step=st)
+                title=st["title"], section_id=None, clause_no=None, heading=None, shown=shown, step=st,
+                matris_dokumani=st["document_id"] in ref_ids)
     return cands
 
 
@@ -226,12 +259,17 @@ def gather(ctx: Context, row: DecisionRow, matrix_roles: dict[str, list[RoleMatc
 def _prompt(row: DecisionRow, cands: list[Candidate]) -> str:
     def line(label, vals):
         return f"{label}: {', '.join(vals) if vals else '-'}"
-    head = "\n".join([f"Karar: {row.karar}", f"Bölüm: {row.bolum or '-'}", line("Hazırlayan", row.hazirlayan),
+    head = "\n".join([f"Karar: {row.karar}", f"Karar süreci: {row.surec or '-'}", f"Karar tipi: {row.karar_tipi or '-'}",
+                      f"Birim: {row.birim or '-'}", f"Bölüm: {row.bolum or '-'}", line("Hazırlayan", row.hazirlayan),
                       line("Onaylayan", row.onaylayan), line("Yetkili", row.yetkili),
+                      line("Karar verici (birim adı olabilir; birden çoksa ortak/kademeli)", row.verici),
+                      line("Katılımcı / ortak birimler", row.katilimci), f"Notlar: {row.notlar or '-'}",
                       line("Bilgi verilen", row.bilgi), line("Danışılan", row.danisilan),
                       f"Limit: {row.limit_text or '-'}", f"Süre: {row.sure_text or '-'}",
                       f"İlgili doküman: {row.dokuman_text or '-'}"])
-    body = "\n\n".join(f'<aday no="{c.no}" tur="{c.kind.value}" kaynak="{c.label}">\n{c.shown}\n</aday>' for c in cands)
+    body = "\n\n".join(
+        f'<aday no="{c.no}" tur="{c.kind.value}"{" matris_dokumani=" + chr(34) + "evet" + chr(34) if c.matris_dokumani else ""} '
+        f'kaynak="{c.label}">\n{c.shown}\n</aday>' for c in cands)
     return f"<karar>\n{head}\n</karar>\n\n<adaylar>\n{body}\n</adaylar>"
 
 
@@ -340,6 +378,9 @@ def build_sources(ctx: Context, cands: list[Candidate], out: KararHukmu) -> tupl
             if st["duration_value"] is not None and canonical_unit(st["duration_unit"]):
                 src.quantities.append(Quantity("=", float(st["duration_value"]), canonical_unit(st["duration_unit"]), "adım süresi"))
             src.untrusted = used_fallback   # süreç adımı rolleri çıkarım ürünüdür, incelenmemiştir
+        src.kodsuz = cand.code.upper().startswith("KODSUZ")
+        if src.kodsuz:
+            src.untrusted = True          # kodsuz doküman: taslak / yeni yüklenmiş olabilir
         sources.append(src)
         if len([s for s in sources if s.iliski != SourceStance.ILGILI]) >= MAX_SOURCES:
             break
@@ -426,6 +467,15 @@ def classify(row: DecisionRow, matrix_roles: dict[str, list[RoleMatch]], sources
             notes.append(f"Matristeki rol ({_names(auth)}) ile dokümandaki rol(ler) (" +
                          "; ".join(dict.fromkeys(_names(s.approvers) for s in support if s.approvers)) +
                          ") sistemdeki tanımlı rollerle eşleştirilemediği için karşılaştırılamadı.")
+    if auth and DecisionField.ONAYLAYAN in verified and len(auth) > 1:
+        missing = [m for m in auth if not any(
+            role_verdict([m], s.approvers, s.weak_roles) == "UYUMLU" for s in support if s.approvers)]
+        if missing:   # ortak / kademeli karar vericilerin hepsi dokümanda doğrulanmadı
+            verified.remove(DecisionField.ONAYLAYAN)
+            unverified.append(DecisionField.ONAYLAYAN)
+            notes.append(f"Ortak/kademeli karar vericiler ({_names(auth)}) içinde dokümanda doğrulanamayan: {_names(missing)}.")
+        else:
+            notes.append(f"Ortak/kademeli karar vericilerin hepsi doğrulandı ({_names(auth)}).")
     prep = matrix_roles.get("hazirlayan", [])
     if prep:
         res = [(role_verdict(prep, s.preparers, s.weak_roles), s, _names(s.preparers)) for s in support if s.preparers]
@@ -472,6 +522,10 @@ def classify(row: DecisionRow, matrix_roles: dict[str, list[RoleMatch]], sources
         text += " " + " ".join(dict.fromkeys(notes))
     if untrusted:
         text += " Doğrulanmamış kaynak: dayanak, henüz insan onayından geçmemiş (ONERILDI) kurala/çıkarıma dayanıyor."
+    drafts = list(dict.fromkeys(f"{s.cand.code} md.{s.clause_no or '-'}" for s in support if s.kodsuz))
+    if drafts:
+        text += (" Dikkat: kaynak doküman kodsuz/taslak olabilir (doküman no boş, yeni yüklenmiş prosedür): "
+                 + "; ".join(drafts) + " — yürürlükteki onaylı doküman sayılmaz.")
     if any(s.verification == "kelime" for s in support):
         text += " Not: süreç adımı alıntısı akış şeması metninden kelime düzeyinde doğrulandı (PDF'de metin sırası bozuk)."
     if row.notes:
@@ -483,8 +537,11 @@ def classify(row: DecisionRow, matrix_roles: dict[str, list[RoleMatch]], sources
 
 # ---- satır işleme -------------------------------------------------------------------------------------------------------
 def resolve_matrix_roles(ctx: Context, row: DecisionRow) -> dict[str, list[RoleMatch]]:
-    out = {f: [ctx.roles.resolve(n) for n in getattr(row, f)] for f in matrix_io.ROLE_FIELDS}
-    out["authorities"] = [ctx.roles.resolve(n) for n in row.authorities]
+    def res(f, n):
+        return ctx.roles.resolve_decider(n) if f == "verici" else ctx.roles.resolve(n)
+    out = {f: [res(f, n) for n in getattr(row, f)] for f in matrix_io.ROLE_FIELDS}
+    out["authorities"] = [res("verici" if n in row.verici and n not in row.onaylayan + row.yetkili else "x", n)
+                          for n in row.authorities]
     return out
 
 
@@ -498,15 +555,54 @@ def _role_report(roles: dict[str, list[RoleMatch]]) -> list[dict]:
     return out
 
 
-def _result(row: DecisionRow, roles, cands, sources, dropped, warnings, verdict: dict, model: str | None) -> dict:
+def doc_check(refs: list[DocRef], support: list[Source]) -> tuple[str | None, list[dict]]:
+    """Matristeki "İlgili Doküman" kontrolü: DOGRULANDI / DESTEKLEMIYOR / SISTEMDE_YOK (genel durum + her başvuru)."""
+    if not refs:
+        return None, []
+    in_support = {s.cand.document_id: s for s in support}
+    items = []
+    for ref in refs:
+        if not ref.resolved:
+            st = DocCheck.SISTEMDE_YOK
+        elif ref.document_id in in_support:
+            st = DocCheck.DOGRULANDI
+        else:
+            st = DocCheck.DESTEKLEMIYOR
+        item = {**ref.as_dict(), "durum": st.value}
+        if st == DocCheck.DOGRULANDI and ref.clause_no:
+            src = in_support[ref.document_id]
+            item["madde_uyumu"] = bool(src.clause_no and (src.clause_no == ref.clause_no
+                                                          or src.clause_no.startswith(ref.clause_no + ".")))
+        items.append(item)
+    states = {i["durum"] for i in items}
+    overall = (DocCheck.DOGRULANDI if DocCheck.DOGRULANDI in states else
+               DocCheck.DESTEKLEMIYOR if DocCheck.DESTEKLEMIYOR in states else DocCheck.SISTEMDE_YOK)
+    return overall.value, items
+
+
+def _result(row: DecisionRow, roles, cands, sources, dropped, warnings, verdict: dict, model: str | None,
+            refs: list[DocRef] | None = None) -> dict:
     support = [s for s in sources if s.iliski != SourceStance.ILGILI]
     related = [s for s in sources if s.iliski == SourceStance.ILGILI]
+    dk, dk_items = doc_check(refs or [], support)
+    aciklama = verdict["aciklama"]
+    missing = [i["girdi"] for i in dk_items if i["durum"] == DocCheck.SISTEMDE_YOK]
+    other = [i["doc_code"] for i in dk_items if i["durum"] == DocCheck.DESTEKLEMIYOR]
+    if missing:
+        aciklama += f" Matristeki doküman sistemde yok: {', '.join(missing)}."
+    if other and dk != DocCheck.DOGRULANDI.value:
+        aciklama += f" Matristeki doküman ({', '.join(other)}) bu kararı desteklemiyor; dayanak başka dokümanda."
+    for i in dk_items:
+        if i.get("madde_uyumu") is False:
+            aciklama += f" Matristeki madde ({i['girdi']}) dayanak maddeyle örtüşmüyor."
     for m in (m for ms in roles.values() for m in ms):
-        if not m.resolved:
+        if not m.resolved and not m.is_unit:
             sug = ", ".join(s["ad"] for s in m.suggestions)
             warnings.append(f"Rol sistemde bulunamadı: '{m.input}'" + (f" (öneri: {sug})" if sug else ""))
-    return {"no": row.idx, "satir": row.sheet_row, "bolum": row.bolum, "karar": row.karar,
-            "girdi": row.as_input(), "durum": verdict["durum"].value, "aciklama": verdict["aciklama"],
+    return {"no": row.idx, "sayfa": row.sheet, "satir": row.sheet_row, "bolum": row.bolum, "karar": row.karar,
+            "girdi": row.as_input(), "durum": verdict["durum"].value, "aciklama": aciklama,
+            "dokuman_kontrolu": dk, "matris_dokumanlari": dk_items,
+            "kodsuz_kaynak": any(s.kodsuz for s in support),
             "kaynaklar": [s.as_dict() for s in support], "ilgili": [s.as_dict() for s in related],
             "celiskiler": verdict["celiskiler"], "dogrulanan_alanlar": verdict["dogrulanan"],
             "dogrulanamayan_alanlar": verdict["dogrulanamayan"], "dogrulanmamis": verdict["dogrulanmamis"],
@@ -524,9 +620,10 @@ def check_rows(conn: sqlite3.Connection, rows: list[DecisionRow], byok: tuple[st
     prepared = []
     for row in rows:
         roles = resolve_matrix_roles(ctx, row)
-        prepared.append((row, roles, gather(ctx, row, roles)))
+        refs = ctx.docs.resolve_cell(row.dokuman_text)
+        prepared.append((row, roles, gather(ctx, row, roles, refs), refs))
     verdicts: dict[int, tuple[KararHukmu, str | None]] = {}
-    todo = [i for i, (_, _, cands) in enumerate(prepared) if cands]
+    todo = [i for i, (_, _, cands, _) in enumerate(prepared) if cands]
     done = len(prepared) - len(todo)
     if progress and done:
         progress(done, len(prepared))
@@ -542,7 +639,7 @@ def check_rows(conn: sqlite3.Connection, rows: list[DecisionRow], byok: tuple[st
             pool.shutdown(wait=False, cancel_futures=True)
             raise
     results = []
-    for i, (row, roles, cands) in enumerate(prepared):
+    for i, (row, roles, cands, refs) in enumerate(prepared):
         if i in verdicts:
             out, model = verdicts[i]
             sources, dropped, warnings = build_sources(ctx, cands, out)
@@ -553,7 +650,7 @@ def check_rows(conn: sqlite3.Connection, rows: list[DecisionRow], byok: tuple[st
         verdict = classify(row, roles, sources, summary, dropped=dropped)
         if dropped:
             warnings.append(f"{dropped} kaynak, alıntısı kaynak metinde doğrulanamadığı için atıldı.")
-        results.append(_result(row, roles, cands, sources, dropped, warnings, verdict, model))
+        results.append(_result(row, roles, cands, sources, dropped, warnings, verdict, model, refs))
     return results
 
 
@@ -561,8 +658,21 @@ def summarize(results: list[dict], total: int | None = None) -> dict:
     counts = {s.value: 0 for s in DecisionStatus}
     for r in results:
         counts[r["durum"]] += 1
+    sheets: dict[str, dict[str, int]] = {}
+    for r in results:
+        sheets.setdefault(r.get("sayfa") or "-", {s.value: 0 for s in DecisionStatus})[r["durum"]] += 1
+    dc = {d.value: 0 for d in DocCheck}
+    dc["BELIRTILMEMIS"] = 0
+    missing: list[str] = []
+    for r in results:
+        dc[r.get("dokuman_kontrolu") or "BELIRTILMEMIS"] += 1
+        for i in r.get("matris_dokumanlari") or []:
+            name = i.get("kod_girdi") or i["girdi"]
+            if i["durum"] == DocCheck.SISTEMDE_YOK and name not in missing:
+                missing.append(name)
     return {"toplam_satir": total if total is not None else len(results), "kontrol_edilen": len(results),
-            "durum": counts, "dogrulanmamis": sum(1 for r in results if r["dogrulanmamis"]),
+            "durum": counts, "sayfalar": sheets, "dokuman_kontrolu": dc, "sistemde_yok_dokumanlar": sorted(missing),
+            "kodsuz_kaynakli": sum(1 for r in results if r.get("kodsuz_kaynak")), "dogrulanmamis": sum(1 for r in results if r["dogrulanmamis"]),
             "atilan_kaynak": sum(r["atilan_kaynak"] for r in results),
             "modeller": sorted({r["model"] for r in results if r["model"]})}
 
@@ -605,14 +715,14 @@ def check_matrix(conn: sqlite3.Connection, file_bytes: bytes, filename: str, byo
 def render_results(file_bytes: bytes, filename: str, results: list[dict]) -> bytes:
     """Daha önce hesaplanmış satır sonuçlarını (parça parça işlenmiş olabilir) Excel'e yazar; LLM çağrısı yapmaz."""
     parsed = load_matrix(file_bytes, filename)
-    valid = {r.sheet_row: r for r in parsed.rows}
+    valid = {(r.sheet, r.sheet_row): r for r in parsed.rows}
     rows = []
     for r in results:
-        src = valid.get(r.get("satir"))
+        src = valid.get((r.get("sayfa"), r.get("satir")))
         if src is None or r.get("durum") not in {s.value for s in DecisionStatus}:
             raise MatrixError("Sonuçlar bu dosyaya ait değil (satır numarası veya durum geçersiz).")
         rows.append({**r, "karar": src.karar, "kaynaklar": r.get("kaynaklar") or [], "eslesen_roller": r.get("eslesen_roller") or []})
-    return matrix_io.render_xlsx(parsed, sorted(rows, key=lambda x: x["satir"]), summarize(rows, total=len(parsed.rows)))
+    return matrix_io.render_xlsx(parsed, sorted(rows, key=lambda x: ((x.get("sayfa") or ""), x["satir"])), summarize(rows, total=len(parsed.rows)))
 
 
 def check_single(conn: sqlite3.Connection, karar: str, yetkili: str | None = None, onaylayan: str | None = None,
