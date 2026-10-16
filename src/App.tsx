@@ -1,42 +1,84 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { kysStore } from './services/kysStore';
-import { StatsResponse } from './types/kys';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { kysApi } from './services/apiClient';
+import { StatsResponse, HealthResponse } from './types/kys';
 import { Header } from './components/Header';
 import { Nav, TabType } from './components/Nav';
 import { AskTab } from './components/AskTab';
 import { SearchTab } from './components/SearchTab';
 import { DocsTab } from './components/DocsTab';
-import { RefsTab } from './components/RefsTab';
 import { DocDetailTab } from './components/DocDetailTab';
-import { LoginModal } from './components/LoginModal';
-import { DriveModal } from './components/DriveModal';
+import { ProcessesTab } from './components/ProcessesTab';
+import { RefsTab } from './components/RefsTab';
+import { SettingsModal } from './components/SettingsModal';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('ask');
   const [activeDocCode, setActiveDocCode] = useState<string | null>(null);
   const [stats, setStats] = useState<StatsResponse | null>(null);
-  const [token, setToken] = useState<string>('');
-  const [showLogin, setShowLogin] = useState<boolean>(false);
-  const [showDrive, setShowDrive] = useState<boolean>(false);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [loadingStats, setLoadingStats] = useState<boolean>(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
 
-  const refreshData = useCallback(() => {
+  // Theme Management
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
-      const s = kysStore.getStats();
-      setStats(s);
-    } catch (e) {
-      console.error('Failed to load stats', e);
+      const saved = localStorage.getItem('kys_theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    } catch {
+      return 'light';
     }
-  }, []);
+  });
 
   useEffect(() => {
-    // Load local API token from localStorage
+    document.documentElement.setAttribute('data-theme', theme);
     try {
-      const savedToken = localStorage.getItem('kys-token') || '';
-      setToken(savedToken);
+      localStorage.setItem('kys_theme', theme);
     } catch {
       // ignore
     }
+  }, [theme]);
 
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
+  const refreshData = useCallback(async () => {
+    setLoadingStats(true);
+    try {
+      const [h, s] = await Promise.allSettled([
+        kysApi.getHealth(),
+        kysApi.getStats(),
+      ]);
+
+      if (h.status === 'fulfilled') {
+        setHealth(h.value);
+      } else {
+        setHealth(null);
+      }
+
+      if (s.status === 'fulfilled') {
+        setStats(s.value);
+      } else {
+        // If stats failed, it could be 401 or network
+        setStats(null);
+      }
+    } catch (e) {
+      console.error('Veriler yenilenirken hata:', e);
+    } finally {
+      setLoadingStats(false);
+    }
+  }, []);
+
+  // Listen for 401 Unauthorized globally
+  useEffect(() => {
+    const unsubscribe = kysApi.onUnauthorized(() => {
+      setShowSettings(true);
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
     refreshData();
   }, [refreshData]);
 
@@ -45,37 +87,26 @@ export const App: React.FC = () => {
     return Object.keys(stats.by_type).sort();
   }, [stats]);
 
-  const hasDocuments = Boolean(stats && stats.documents > 0);
-
   const handleOpenDoc = (code: string) => {
     setActiveDocCode(code);
     setCurrentTab('doc');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleCloseDoc = () => {
     setCurrentTab('docs');
   };
 
-  const handleSaveToken = (newToken: string) => {
-    setToken(newToken);
-    try {
-      if (newToken) {
-        localStorage.setItem('kys-token', newToken);
-      } else {
-        localStorage.removeItem('kys-token');
-      }
-    } catch {
-      // ignore
-    }
-  };
-
   return (
     <>
       <Header
         stats={stats}
-        hasToken={Boolean(token)}
-        onOpenLogin={() => setShowLogin(true)}
-        onOpenDrive={() => setShowDrive(true)}
+        health={health}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onOpenSettings={() => setShowSettings(true)}
+        onRefresh={refreshData}
+        loading={loadingStats}
       />
 
       <main>
@@ -86,22 +117,28 @@ export const App: React.FC = () => {
         />
 
         {currentTab === 'ask' && (
-          <AskTab onOpenDoc={handleOpenDoc} hasDocuments={hasDocuments} />
+          <AskTab onOpenDoc={handleOpenDoc} />
         )}
+
         {currentTab === 'search' && (
-          <SearchTab onOpenDoc={handleOpenDoc} hasDocuments={hasDocuments} />
+          <SearchTab onOpenDoc={handleOpenDoc} />
         )}
+
         {currentTab === 'docs' && (
           <DocsTab
             onOpenDoc={handleOpenDoc}
             availableTypes={availableTypes}
-            onDataChanged={refreshData}
-            onOpenDrive={() => setShowDrive(true)}
           />
         )}
-        {currentTab === 'refs' && (
-          <RefsTab onOpenDoc={handleOpenDoc} hasDocuments={hasDocuments} />
+
+        {currentTab === 'processes' && (
+          <ProcessesTab onOpenDoc={handleOpenDoc} />
         )}
+
+        {currentTab === 'refs' && (
+          <RefsTab onOpenDoc={handleOpenDoc} />
+        )}
+
         {currentTab === 'doc' && activeDocCode && (
           <DocDetailTab
             code={activeDocCode}
@@ -111,18 +148,10 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {showLogin && (
-        <LoginModal
-          initialToken={token}
-          onSaveToken={handleSaveToken}
-          onClose={() => setShowLogin(false)}
-        />
-      )}
-
-      {showDrive && (
-        <DriveModal
-          onClose={() => setShowDrive(false)}
-          onDataImported={refreshData}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          onSaved={refreshData}
         />
       )}
     </>

@@ -1,6 +1,7 @@
 import React from 'react';
+import { MessageSquare, Search, FileText, GitBranch, AlertTriangle, BookOpen } from 'lucide-react';
 
-export type TabType = 'ask' | 'search' | 'docs' | 'refs' | 'doc';
+export type TabType = 'ask' | 'search' | 'docs' | 'processes' | 'refs' | 'doc';
 
 interface NavProps {
   currentTab: TabType;
@@ -10,42 +11,60 @@ interface NavProps {
 
 export const Nav: React.FC<NavProps> = ({ currentTab, onSelectTab, activeDocCode }) => {
   return (
-    <nav>
+    <nav aria-label="Ana Menü">
       <button
         type="button"
-        className={currentTab === 'ask' ? 'on' : ''}
+        className={currentTab === 'ask' ? 'active' : ''}
         onClick={() => onSelectTab('ask')}
       >
-        Soru sor
+        <MessageSquare size={16} />
+        <span>Soru Sor</span>
       </button>
+
       <button
         type="button"
-        className={currentTab === 'search' ? 'on' : ''}
+        className={currentTab === 'search' ? 'active' : ''}
         onClick={() => onSelectTab('search')}
       >
-        Ara
+        <Search size={16} />
+        <span>Ara</span>
       </button>
+
       <button
         type="button"
-        className={currentTab === 'docs' ? 'on' : ''}
+        className={currentTab === 'docs' ? 'active' : ''}
         onClick={() => onSelectTab('docs')}
       >
-        Dokümanlar
+        <FileText size={16} />
+        <span>Dokümanlar</span>
       </button>
+
       <button
         type="button"
-        className={currentTab === 'refs' ? 'on' : ''}
+        className={currentTab === 'processes' ? 'active' : ''}
+        onClick={() => onSelectTab('processes')}
+      >
+        <GitBranch size={16} />
+        <span>Süreçler</span>
+      </button>
+
+      <button
+        type="button"
+        className={currentTab === 'refs' ? 'active' : ''}
         onClick={() => onSelectTab('refs')}
       >
-        Eksik atıflar
+        <AlertTriangle size={16} />
+        <span>Eksik Atıflar</span>
       </button>
+
       {activeDocCode && (
         <button
           type="button"
-          className={currentTab === 'doc' ? 'on' : ''}
+          className={currentTab === 'doc' ? 'active' : ''}
           onClick={() => onSelectTab('doc')}
         >
-          Doküman ({activeDocCode})
+          <BookOpen size={16} />
+          <span>Ayrıntı: {activeDocCode}</span>
         </button>
       )}
     </nav>
