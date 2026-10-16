@@ -50,6 +50,7 @@ class Settings:
     access_token: str               # boşsa kimlik doğrulama yok (yalnızca yerel kullanım)
     db_url: str                     # konteyner açılışında DB yoksa buradan indirilir
     allowed_hosts: tuple[str, ...]  # MCP için Host başlığı beyaz listesi (boşsa kontrol yok)
+    inbox_dir: Path = Path("data/inbox")  # zamanlanmış yüklemenin okuduğu doküman klasörü (KYS_INBOX_DIR)
     pages_dir: Path | None = None   # önceden üretilmiş PDF sayfa PNG'leri: <pages_dir>/<dosya_sha256>/<n>.png
     files_dir: Path | None = None   # orijinal dosyaların bulunabileceği ek klasör (dosya adıyla aranır)
 
@@ -75,6 +76,7 @@ settings = Settings(
     access_token=os.getenv("KYS_ACCESS_TOKEN", ""),
     db_url=os.getenv("KYS_DB_URL", ""),
     allowed_hosts=tuple(h.strip() for h in os.getenv("KYS_ALLOWED_HOSTS", "").split(",") if h.strip()),
+    inbox_dir=_resolve(os.getenv("KYS_INBOX_DIR", "data/inbox")),
     pages_dir=_resolve(os.environ["KYS_PAGES_DIR"]) if os.getenv("KYS_PAGES_DIR") else None,
     files_dir=_resolve(os.environ["KYS_FILES_DIR"]) if os.getenv("KYS_FILES_DIR") else None,
 )

@@ -213,14 +213,14 @@ def cmd_scheduled(args) -> None:
 
     Şirket politikası cmd.exe'yi engellediği için Görev Zamanlayıcı doğrudan kys.exe'yi çağırır; yönlendirme burada yapılır.
     """
-    from .config import LOCAL_HOME, PROJECT_ROOT
+    from .config import LOCAL_HOME, settings
     log_dir = LOCAL_HOME / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"zamanli-{datetime.now():%Y%m%d-%H%M}.log"
     with open(log_path, "w", encoding="utf-8") as log:
         sys.stdout = sys.stderr = log
         try:
-            cmd_ingest(argparse.Namespace(path=str(PROJECT_ROOT / "data" / "inbox"), no_llm=True))
+            cmd_ingest(argparse.Namespace(path=str(settings.inbox_dir), no_llm=True, no_ocr=False))
             print()
             cmd_classify(argparse.Namespace(limit=args.limit, redo=False))
         except Exception:
