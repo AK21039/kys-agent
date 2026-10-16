@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kys-serve",
+      "runtimeExecutable": "C:\\Users\\aydin.kaleoglu\\AppData\\Local\\kys-agent\\.venv\\Scripts\\kys.exe",
+      "runtimeArgs": ["serve", "--port", "8765"],
+      "port": 8765
+    },
+    {
+      "name": "ai-web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:\\Users\\AYDIN~1.KAL\\AppData\\Local\\Temp\\claude\\W--KYS-Agent\\d58c47ee-3949-4105-ae11-8c5a9b8d91cd\\scratchpad\\ai-web\\node_modules\\vite\\bin\\vite.js", "C:\\Users\\AYDIN~1.KAL\\AppData\\Local\\Temp\\claude\\W--KYS-Agent\\d58c47ee-3949-4105-ae11-8c5a9b8d91cd\\scratchpad\\ai-web", "--host", "0.0.0.0", "--port", "3000", "--force"],
+      "port": 3000
+    }
+  ]
+}
