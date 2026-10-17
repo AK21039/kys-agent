@@ -196,7 +196,7 @@ def test_parse_chain_single_and_multiple():
     from kys.config import DEFAULT_QUERY_CHAIN, parse_chain
     assert parse_chain("anthropic:claude-haiku-5-5") == (ModelSpec("anthropic", "claude-haiku-5-5"),)
     chain = parse_chain(DEFAULT_QUERY_CHAIN)
-    assert [m.provider for m in chain] == ["gemini", "gemini", "anthropic"]
+    assert [m.provider for m in chain] == ["gemini", "gemini", "ollama", "anthropic"]
 
 
 def test_chain_falls_through_on_503_and_logs_each_attempt(conn, monkeypatch):

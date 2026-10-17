@@ -9,7 +9,7 @@ Yeni bir oturum bu dosyayla başlar. Ayrıntı: [PLAN.md](PLAN.md) (fazlar), [DE
 |---|---|
 | Sorgu servisi (Cloud Run `kys-qa`, europe-west1) | https://kys-qa-53duzoe3kq-ew.a.run.app/qa/ (eski arayüz), `/qa/app/` (AI Studio arayüzü), `/qa/mcp` |
 | Cloudflare | `qa.paktenops.com` (custom domain), `paktenops.com/qa*` (route, Access korumalı) → Worker `qa` |
-| GCP projesi | `gen-lang-client-0066123286` ("KYS Agent"), PrePay faturalandırma; 50 TL bütçe kesici (`infra/billing-kill`) |
+| GCP projesi | `gen-lang-client-0066123286` ("KYS Agent"), fatura hesabı 017A8D-8EDFD8-8982A6 (Cloud servisleri Postpay, Gemini API Prepay kredisi); bütçe kesici 2026-10-17'de kaldırıldı |
 | Veri kopyası | `gs://kys-agent-qa-data-268170449963` (özel): `kys.db` + `pages/` |
 | Secret Manager | `kys-access-token`, `kys-anthropic-api-key`, `kys-gemini-api-key` (PrePay projesinde oluşturuldu) |
 | Sorgu modeli zinciri | `gemini-3.6-flash → gemini-3.1-flash-lite → claude-haiku-5-5`; hepsi düşerse 503 `MODEL_YOK` + BYOK |

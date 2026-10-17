@@ -17,7 +17,7 @@ LOCAL_HOME = Path(os.getenv("LOCALAPPDATA", Path.home())) / "kys-agent"
 PROVIDERS = ("anthropic", "ollama", "openai", "gemini")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 # Sorgu katmanı model zinciri varsayılanı: sırayla denenir (kota/geçici hata → sıradaki)
-DEFAULT_QUERY_CHAIN = "gemini:gemini-3.6-flash,gemini:gemini-3.1-flash-lite,anthropic:claude-haiku-5-5"
+DEFAULT_QUERY_CHAIN = "gemini:gemini-3.6-flash,gemini:gemini-3.1-flash-lite,ollama:gemma4:latest,anthropic:claude-haiku-5-5"
 # BYOK'ta kullanıcı yalnızca bu sağlayıcılardan birini seçebilir
 BYOK_PROVIDERS = ("gemini", "anthropic")
 

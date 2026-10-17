@@ -160,8 +160,8 @@ Doğrulama: `/qa/app/` açılır, `/qa/api/health` 200, tokensız `/qa/api/stats
 - Asıl değişken maliyet `/qa/api/ask` çağrılarındaki Haiku token'larıdır (Anthropic faturası, GCP'den ayrı).
 - Depolama ~46 MB (bucket) + tek imaj (~80 MB Artifact Registry, ilk 0,5 GB ücretsiz); Secret Manager 2 sır
   (ilk 6 sürüm ücretsiz).
-- **Bütçe kesici** (`infra/billing-kill`): aylık 50 TL bütçe aşılınca projenin faturalandırmasını kapatır; Cloud Run
-  durur, veri silinmez. Yeniden açmak elle yapılır.
+- **Maliyet sınırı:** Gemini API, fatura hesabının Prepay (AI Studio) kredisinden ödenir; kredi bitince yalnızca Gemini
+  çağrıları durur ve zincir sıradaki modele geçer. Bütçe kesici (`billing-kill`) 2026-10-17'de kaldırıldı.
 - Anahtar yanlış ellere geçerse secret'ı döndürün; bucket hiçbir zaman public yapılmaz.
 
 ## Diğer barındırma seçenekleri (referans)
