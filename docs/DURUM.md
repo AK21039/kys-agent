@@ -63,13 +63,13 @@ rol birleştirme gerekiyor. Diğer sayfalar (Planlama, Satınalma, Üretim) ilgi
    `kys rol-grupla` → `data/rol_gruplari.xlsx` (KARAR EVET/HAYIR, ANA AD) → `kys rol-onayla DOSYA` (önizleme) →
    `--apply`. Eski adlar ana rolün takma adı olur, tüm atıflar (kural, süreç, adım, karar, onay zinciri, kenar) taşınır;
    karar kontrolü (`RoleIndex`) takma adları zaten okuyor. Kararlar `data/kys_role_merges.json` (DB dışında).
-   **Bekleyen:** canlı DB'de (bu PC) çalıştırma + kullanıcı onayı + karar matrisini yeniden koşma.
+   **Uygulandı (2026-10-18):** 19 aday gruptan 11'i birleşti (12 varlık, 64 atıf, 8 takma ad; 279 → 267 rol); Müdür/Yönetici ve Üst Yönetim/Üst Yönetici ayrı kaldı. Canlı DB ve Cloud Run yayını (`kys-qa-00012`) güncel. **Bekleyen:** karar matrisini yeniden koşma.
    Sonraki adım: birim ↔ yönetici (örn. "Yatırım ve Bakım" ↔ "Yatırımlar ve Bakım Direktörü") onaylı eşlemesi.
 2. **Onay Kuyruğu:** 1381 `ONERILDI` kuralın onay/düzelt/reddet ekranı (API + `/qa/` sekmesi; AI Studio'ya ekran görevi).
 3. Kodsuz 9 prosedürün kod ve yürürlük durumu (kullanıcıdan); PR11-SA-2/3/4 dokümanlarının yüklenmesi.
 4. Analiz motoru: deterministik çelişki/boşluk taramaları, bulgu raporu.
 5. Arama: "kaynak" (kaynak işi/doküman kaynağı) gibi çok anlamlı terimlerde geri getirme zayıf.
-6. Cloudflare: Access + Worker `KYS_TOKEN` (token'sız kullanım); workers.dev adresini kapatma.
+6. Cloudflare: Worker `KYS_TOKEN` tanımlandı (2026-10-18, tek anahtar). workers.dev adresinin kapatıldığı doğrulanmadı.
 
 ## Çalışma kuralları (kullanıcı tercihleri)
 
