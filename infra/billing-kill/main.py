@@ -14,6 +14,9 @@ from googleapiclient.errors import HttpError
 
 PROJECT_ID = os.environ["KILL_PROJECT_ID"]
 PROJECT_NAME = f"projects/{PROJECT_ID}"
+# Kesme eşiği (bildirimdeki para birimiyle). Tanımlıysa bildirimdeki budgetAmount yerine bu kullanılır;
+# fatura hesabında birden fazla bütçe aynı konuya yayın yapsa da tek eşik geçerli olur.
+KILL_LIMIT = float(os.environ.get("KILL_LIMIT", "0") or 0)
 
 
 def _billing():
@@ -34,7 +37,12 @@ def stop_billing(event):
     data = json.loads(base64.b64decode(event.data["message"]["data"]).decode())
     cost = float(data.get("costAmount", 0))
     budget = float(data.get("budgetAmount", 0))
-    print(f"bütçe bildirimi: maliyet={cost} bütçe={budget} {data.get('currencyCode', '')}")
+    attrs = event.data["message"].get("attributes") or {}
+    print(
+        f"bütçe bildirimi: maliyet={cost} bütçe={budget} {data.get('currencyCode', '')} "
+        f"ad={data.get('budgetDisplayName', '')!r} hesap={attrs.get('billingAccountId', '')} "
+        f"bütçe_id={attrs.get('budgetId', '')}"
+    )
 
     if data.get("selfTest"):
         # Kurulum testi: yetkiyi doğrula, hiçbir şeyi değiştirme.
@@ -46,8 +54,9 @@ def stop_billing(event):
         print(f"SELFTEST yetki={perms} faturalandirma_acik={_billing_enabled(_billing())}")
         return
 
-    if budget <= 0 or cost <= budget:
-        print("bütçe aşılmadı; işlem yok")
+    limit = KILL_LIMIT if KILL_LIMIT > 0 else budget
+    if limit <= 0 or cost <= limit:
+        print(f"eşik aşılmadı (eşik={limit}); işlem yok")
         return
 
     billing = _billing()
