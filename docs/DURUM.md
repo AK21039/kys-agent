@@ -17,7 +17,7 @@ Yeni bir oturum bu dosyayla başlar. Ayrıntı: [PLAN.md](PLAN.md) (fazlar), [DE
 ## Bu PC'ye bağlı olanlar (uzak oturum erişemez)
 
 - Kod: `W:\KYS Agent` (= `\\10.10.10.25\Proje\KYS Agent`), GitHub `AK21039/kys-agent` (main).
-- venv + yazılabilir DB: `%LOCALAPPDATA%\kys-agent\` (`kys.exe`, `kys.db`, `access_token.txt`, `lan_token.txt`).
+- venv + yazılabilir DB: `%LOCALAPPDATA%\kys-agent\` (`kys.exe`, `kys.db`, `access_token.txt`). Erişim anahtarı tektir: `access_token.txt` = `.env` = Secret Manager `kys-access-token` = Cloudflare `qa` Worker `KYS_TOKEN` (2026-10-18; ayrı `lan_token.txt` kaldırıldı).
 - `.env` (API anahtarları; asla yazdırılmaz, git'e girmez), şirket dokümanları (`data/`, Drive senkronu).
 - Doküman kaynağı: `C:\Users\aydin.kaleoglu\Drive’ım (azekaleoglu@gmail.com)\kys-agent\data\inbox` (`KYS_INBOX_DIR`).
 - Ollama (gemma4, sınıflandırma), Word/Excel/Visio COM (eski Office dönüştürme), Windows OCR (Türkçe).
