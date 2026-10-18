@@ -72,6 +72,7 @@ class Settings:
     files_dir: Path | None = None   # orijinal dosyaların bulunabileceği ek klasör (dosya adıyla aranır)
     web_dir: Path | None = None     # KYS_WEB_DIR: derlenmiş web uygulaması (infra/build_web.py → web-dist); {base}/app altında sunulur
     role_merges_path: Path = Path("data/kys_role_merges.json")  # onaylı rol birleştirmeleri (kys rol-onayla)
+    writable: bool = False          # KYS_WRITABLE=1: /api/review POST uçları açılır (yerel kys serve dışında KAPALI kalır)
 
 
 def _resolve(path: str) -> Path:
@@ -107,4 +108,5 @@ settings = Settings(
     run_region=os.getenv("KYS_RUN_REGION", "europe-west1"),
     files_dir=_resolve(os.environ["KYS_FILES_DIR"]) if os.getenv("KYS_FILES_DIR") else None,
     web_dir=_resolve(os.environ["KYS_WEB_DIR"]) if os.getenv("KYS_WEB_DIR") else None,
+    writable=os.getenv("KYS_WRITABLE", "").strip() == "1",
 )

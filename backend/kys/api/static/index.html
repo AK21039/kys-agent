@@ -72,6 +72,14 @@
                     padding: 4px 10px; cursor: pointer; font: inherit; }
   .dec-sum button.on { border-color: var(--accent); }
   #dec-out td, #dec-out th { font-size: 13px; }
+  .st.rv-ONERILDI { background: #d9d9d9; color: #333; }
+  .st.rv-ONAYLANDI { background: #c6efce; color: #14532d; }
+  .st.rv-DUZELTILDI { background: #ffeb9c; color: #6b4e00; }
+  .st.rv-REDDEDILDI { background: #ffc7ce; color: #7f1d1d; }
+  .rv-edit-form { flex-direction: column; align-items: stretch; margin: 8px 0 0; gap: 6px; }
+  .rv-edit-form textarea { min-height: 50px; }
+  #review-out .card button.rv-act { border: 1px solid var(--line); background: var(--panel); color: var(--text);
+                    border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; margin-right: 6px; }
 </style>
 </head>
 <body>
@@ -84,6 +92,7 @@
     <button data-tab="flow">Süreçler</button>
     <button data-tab="refs">Eksik atıflar</button>
     <button data-tab="decisions">Karar Matrisi</button>
+    <button data-tab="review">Onay Kuyruğu</button>
   </nav>
 
   <div id="login" class="card hidden">
@@ -153,6 +162,30 @@
     </div>
     <div id="dec-out"></div>
   </section>
+  <section id="tab-review" class="hidden">
+    <div id="review-summary" class="card">Yükleniyor…</div>
+    <div id="review-readonly" class="warn hidden" style="margin-bottom:10px">Bu sunucu salt okunur — onaylar yerel <code>kys serve</code> ile yapılır.</div>
+    <form id="review-filter-form" style="flex-wrap:wrap">
+      <select id="rv-status">
+        <option value="ONERILDI">Önerildi (bekleyen)</option>
+        <option value="ONAYLANDI">Onaylandı</option>
+        <option value="DUZELTILDI">Düzeltildi</option>
+        <option value="REDDEDILDI">Reddedildi</option>
+        <option value="">Tümü</option>
+      </select>
+      <select id="rv-type"></select>
+      <input id="rv-doc" placeholder="Doküman kodu (ör. PR-04)">
+      <input id="rv-q" placeholder="Metinde ara…">
+      <button>Filtrele</button>
+    </form>
+    <div id="review-bulkbar" class="dec-sum hidden">
+      <b><span id="rv-sel-count">0</span> seçili</b>
+      <button type="button" id="rv-bulk-onayla">Toplu Onayla</button>
+      <button type="button" id="rv-bulk-reddet">Toplu Reddet</button>
+    </div>
+    <div id="review-out"></div>
+    <div class="pager" id="review-pager"><button id="rv-prev" type="button">&larr;</button><span id="rv-pg-label" class="meta"></span><button id="rv-next" type="button">&rarr;</button></div>
+  </section>
   <section id="tab-doc" class="hidden"><div id="doc-out"></div></section>
 </main>
 <script>
@@ -178,11 +211,12 @@ const ref = (d) => `<span class="ref" data-code="${esc(d.code)}">${esc(d.code)} 
 
 function show(tab) {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("on", b.dataset.tab === tab));
-  ["ask", "search", "docs", "flow", "refs", "decisions", "doc"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== tab));
+  ["ask", "search", "docs", "flow", "refs", "decisions", "review", "doc"].forEach((t) => $("tab-" + t).classList.toggle("hidden", t !== tab));
   document.querySelector("main").classList.toggle("wide", tab === "flow");
   if (tab === "flow" && $("flow-sel").options.length < 2) loadProcessList();
   if (tab === "docs" && !$("docs-out").innerHTML) loadDocs();
   if (tab === "refs" && !$("refs-out").innerHTML) loadRefs();
+  if (tab === "review" && !$("review-out").dataset.loaded) { $("review-out").dataset.loaded = "1"; loadReviewSummary(); loadReviewRules(); }
 }
 document.querySelectorAll("nav button").forEach((b) => b.onclick = () => show(b.dataset.tab));
 document.addEventListener("click", (e) => { const c = e.target.closest(".ref")?.dataset.code; if (c) openDoc(c); });
@@ -442,6 +476,157 @@ async function downloadDecisions() {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   } catch (err) { fail("dec-out", err); } finally { btn.disabled = false; }
 }
+
+// ---- Onay Kuyruğu: önerilen kuralları listele / süz / ara / onayla / düzelt / reddet / toplu işlem ----
+const RULE_TYPES = ["ONAY", "YETKI", "SORUMLULUK", "SURE", "ESIK", "ZORUNLU_KAYIT", "ZORUNLU_ADIM", "YASAK",
+                    "TETIKLEYICI", "BILGILENDIRME"];
+const RV_LABEL = {ONERILDI: "Önerildi", ONAYLANDI: "Onaylandı", DUZELTILDI: "Düzeltildi", REDDEDILDI: "Reddedildi"};
+const THRESHOLD_OPS = [">", ">=", "<", "<=", "="];
+const rvState = {status: "ONERILDI", docCode: "", ruleType: "", q: "", limit: 20, offset: 0, total: 0,
+                 writable: false, rows: [], selected: new Set(), editing: null};
+$("rv-type").innerHTML = '<option value="">Tüm kural tipleri</option>' + RULE_TYPES.map((t) => `<option>${t}</option>`).join("");
+
+async function loadReviewSummary() {
+  try {
+    const s = await api("/review/summary");
+    rvState.writable = !!s.yazilabilir;
+    $("review-readonly").classList.toggle("hidden", rvState.writable);
+    const durum = s.durum || {};
+    let h = `<div class="dec-sum"><b>${s.bekleyen_toplam} bekleyen</b>` +
+      Object.keys(RV_LABEL).map((k) => `<span class="pill">${RV_LABEL[k]}: ${durum[k] || 0}</span>`).join("") + `</div>`;
+    if ((s.dokuman_bekleyen || []).length) h += `<div class="meta">Bekleyen (doküman): ` +
+      s.dokuman_bekleyen.map((d) => `${esc(d.doc_code)} (${d.bekleyen})`).join(" · ") + `</div>`;
+    if (Object.keys(s.tip_bekleyen || {}).length) h += `<div class="meta" style="margin-top:4px">Bekleyen (tip): ` +
+      Object.entries(s.tip_bekleyen).map(([k, v]) => `${esc(k)}: ${v}`).join(" · ") + `</div>`;
+    $("review-summary").innerHTML = h;
+  } catch (err) { fail("review-summary", err); }
+}
+
+function rvParams() {
+  const p = new URLSearchParams({limit: rvState.limit, offset: rvState.offset});
+  if (rvState.status) p.set("status", rvState.status);
+  if (rvState.docCode) p.set("doc_code", rvState.docCode);
+  if (rvState.ruleType) p.set("rule_type", rvState.ruleType);
+  if (rvState.q) p.set("q", rvState.q);
+  return p;
+}
+
+async function loadReviewRules() {
+  $("review-out").innerHTML = '<div class="meta">Yükleniyor…</div>';
+  try {
+    const r = await api("/review/rules?" + rvParams());
+    rvState.rows = r.kurallar; rvState.total = r.toplam; rvState.selected.clear(); rvState.editing = null;
+    renderReview();
+  } catch (err) { fail("review-out", err); }
+}
+
+function rvRowActions(r) {
+  if (!rvState.writable) return '<span class="meta">salt okunur</span>';
+  return `<button type="button" class="rv-act" data-id="${r.id}" data-act="ONAYLA">Onayla</button>` +
+         `<button type="button" class="rv-act" data-id="${r.id}" data-act="duzelt-ac">Düzelt</button>` +
+         `<button type="button" class="rv-act" data-id="${r.id}" data-act="REDDET">Reddet</button>`;
+}
+
+function rvEditForm(r) {
+  return `<form class="rv-edit-form" data-id="${r.id}">
+    <textarea data-f="statement">${esc(r.statement)}</textarea>
+    <select data-f="rule_type">${RULE_TYPES.map((t) => `<option ${t === r.rule_type ? "selected" : ""}>${t}</option>`).join("")}</select>
+    <div style="display:flex;gap:6px">
+      <select data-f="threshold_op" style="flex:0 0 72px"><option value="">—</option>${THRESHOLD_OPS.map((o) => `<option ${o === r.threshold_op ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>
+      <input data-f="threshold_value" type="number" step="any" value="${r.threshold_value ?? ""}" placeholder="değer">
+      <input data-f="threshold_unit" value="${esc(r.threshold_unit || "")}" placeholder="birim">
+    </div>
+    <input data-f="condition_text" value="${esc(r.condition_text || "")}" placeholder="koşul">
+    <div style="display:flex;gap:8px">
+      <button type="submit">Kaydet</button>
+      <button type="button" class="rv-cancel" data-id="${r.id}">Vazgeç</button>
+    </div>
+  </form>`;
+}
+
+function renderReview() {
+  $("review-bulkbar").classList.toggle("hidden", rvState.selected.size === 0);
+  $("rv-sel-count").textContent = rvState.selected.size;
+  $("review-out").innerHTML = rvState.rows.length ? rvState.rows.map((r) => {
+    const st = `<span class="st rv-${r.review_status}">${RV_LABEL[r.review_status] || r.review_status}</span>`;
+    const checkbox = rvState.writable && r.review_status === "ONERILDI"
+      ? `<input type="checkbox" class="rv-check" data-id="${r.id}" ${rvState.selected.has(r.id) ? "checked" : ""}> ` : "";
+    return `<div class="card">${checkbox}${ref({code: r.doc_code, revision: r.doc_revision, clause_no: r.clause_no})} ${st} <span class="pill">${esc(r.rule_type)}</span>
+      <div class="meta">${r.subject ? esc(r.subject) + " · " : ""}${esc(r.doc_title)}${r.confidence != null ? " · güven %" + Math.round(r.confidence * 100) : ""}${r.extracted_by ? " · " + esc(r.extracted_by) : ""}</div>
+      <div style="margin-top:4px">${esc(r.statement)}</div>
+      ${r.condition_text ? `<div class="meta">Koşul: ${esc(r.condition_text)}</div>` : ""}
+      ${r.threshold_op ? `<div class="meta">Eşik: ${esc(r.threshold_op)} ${r.threshold_value ?? ""} ${esc(r.threshold_unit || "")}</div>` : ""}
+      <div class="quote">${esc(r.quote)}</div>
+      ${r.reviewed_by ? `<div class="meta">${esc(r.reviewed_by)} · ${esc((r.reviewed_at || "").slice(0, 16).replace("T", " "))}${r.review_note ? " — " + esc(r.review_note) : ""}</div>` : ""}
+      <div style="margin-top:8px">${rvRowActions(r)}</div>
+      ${rvState.editing === r.id ? rvEditForm(r) : ""}
+    </div>`;
+  }).join("") : '<div class="meta">Sonuç yok.</div>';
+  const shown = rvState.offset + rvState.rows.length;
+  $("rv-pg-label").textContent = rvState.total ? `${rvState.offset + 1}-${shown} / ${rvState.total}` : "0 / 0";
+  $("rv-prev").disabled = rvState.offset <= 0;
+  $("rv-next").disabled = shown >= rvState.total;
+}
+
+async function rvRefresh() { await Promise.all([loadReviewRules(), loadReviewSummary()]); }
+
+function rvHandleError(err) {
+  if (err.code === "SALT_OKUNUR") { rvState.writable = false; $("review-readonly").classList.remove("hidden"); renderReview(); }
+  else fail("review-out", err);
+}
+
+async function rvAction(id, action, extra) {
+  try { await api("/review/rules/" + id, {method: "POST", body: JSON.stringify({action, ...extra})}); await rvRefresh(); }
+  catch (err) { rvHandleError(err); }
+}
+
+async function rvBulk(action) {
+  const ids = [...rvState.selected]; if (!ids.length) return;
+  try { await api("/review/rules/bulk", {method: "POST", body: JSON.stringify({ids, action})}); await rvRefresh(); }
+  catch (err) { rvHandleError(err); }
+}
+
+$("review-filter-form").onsubmit = (e) => {
+  e.preventDefault();
+  rvState.status = $("rv-status").value; rvState.ruleType = $("rv-type").value;
+  rvState.docCode = $("rv-doc").value.trim(); rvState.q = $("rv-q").value.trim(); rvState.offset = 0;
+  loadReviewRules();
+};
+$("rv-prev").onclick = () => { rvState.offset = Math.max(0, rvState.offset - rvState.limit); loadReviewRules(); };
+$("rv-next").onclick = () => { rvState.offset += rvState.limit; loadReviewRules(); };
+$("rv-bulk-onayla").onclick = () => rvBulk("ONAYLA");
+$("rv-bulk-reddet").onclick = () => rvBulk("REDDET");
+
+$("review-out").addEventListener("click", (e) => {
+  const chk = e.target.closest(".rv-check");
+  if (chk) {
+    const id = +chk.dataset.id;
+    chk.checked ? rvState.selected.add(id) : rvState.selected.delete(id);
+    $("rv-sel-count").textContent = rvState.selected.size;
+    $("review-bulkbar").classList.toggle("hidden", !rvState.selected.size);
+    return;
+  }
+  const cancel = e.target.closest(".rv-cancel");
+  if (cancel) { rvState.editing = null; renderReview(); return; }
+  const btn = e.target.closest(".rv-act"); if (!btn) return;
+  const id = +btn.dataset.id, act = btn.dataset.act;
+  if (act === "duzelt-ac") { rvState.editing = id; renderReview(); return; }
+  if (act === "REDDET") { const note = prompt("Reddetme notu (isteğe bağlı):"); rvAction(id, "REDDET", note ? {note} : {}); return; }
+  rvAction(id, act);
+});
+
+$("review-out").addEventListener("submit", (e) => {
+  const form = e.target.closest(".rv-edit-form"); if (!form) return;
+  e.preventDefault();
+  const id = +form.dataset.id, edits = {};
+  const KEEP_EMPTY = new Set(["threshold_op", "threshold_unit", "condition_text"]);
+  form.querySelectorAll("[data-f]").forEach((el) => {
+    const v = el.value.trim();
+    if (el.dataset.f === "threshold_value") { if (v !== "") edits.threshold_value = Number(v); }
+    else if (v !== "" || KEEP_EMPTY.has(el.dataset.f)) edits[el.dataset.f] = v || null;
+  });
+  rvAction(id, "DUZELT", {edits});
+});
 
 async function init() {
   try {

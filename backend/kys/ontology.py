@@ -105,6 +105,13 @@ class ReviewStatus(StrEnum):
 TRUSTED_REVIEW = (ReviewStatus.ONAYLANDI, ReviewStatus.DUZELTILDI)
 
 
+class ReviewAction(StrEnum):
+    """Onay Kuyruğu'nda kullanıcının bir kural üzerinde alabileceği karar (review.review_rule)."""
+    ONAYLA = "ONAYLA"      # -> ReviewStatus.ONAYLANDI
+    DUZELT = "DUZELT"      # -> ReviewStatus.DUZELTILDI (en az bir alan düzenlenir)
+    REDDET = "REDDET"      # -> ReviewStatus.REDDEDILDI
+
+
 class FindingType(StrEnum):
     CAKISMA = "CAKISMA"
     BOSLUK = "BOSLUK"

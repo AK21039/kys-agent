@@ -183,15 +183,18 @@ def import_file(conn: sqlite3.Connection, path: Path, extractor: str = "ajan:cla
                 return None
             return roles.get(fold(name)) or resolve_entity(conn, EntityType.ROL, name)
 
-        reviewed = {fold(q) for (q,) in conn.execute(
-            "SELECT quote FROM rules WHERE document_id = ? AND review_status != 'ONERILDI'", (doc["id"],))}
-        added = dropped = 0
+        # (rule_type, alıntı) eşleşmesiyle kontrol edilir: aynı doküman için aynı kuralı başka bir rule_type ile
+        # öneren bir sonraki içe aktarım, kullanıcının o alıntıyı incelediği gerçeğini saklamaz (farklı kural sayılır).
+        reviewed = {(rt, fold(q)) for rt, q in conn.execute(
+            "SELECT rule_type, quote FROM rules WHERE document_id = ? AND review_status != 'ONERILDI'", (doc["id"],))}
+        added = dropped = skipped_reviewed = 0
         for rule in ex.rules:
             if not verify_quote(rule.quote, text):
                 dropped += 1  # kanıtsız kural kaydedilmez (CLAUDE.md değişmez 1)
                 continue
-            if fold(rule.quote) in reviewed:
-                continue  # kullanıcı zaten onayladı/düzeltti/reddetti; tekrar önerme
+            if (rule.rule_type, fold(rule.quote)) in reviewed:
+                skipped_reviewed += 1  # kullanıcı zaten onayladı/düzeltti/reddetti; ONERILDI ikizi açılmaz
+                continue
             sid = _section_for(conn, doc["id"], rule.clause_no, rule.quote)
             subj = role_id(rule.subject)
             rid = conn.execute(
@@ -244,14 +247,18 @@ def import_file(conn: sqlite3.Connection, path: Path, extractor: str = "ajan:cla
                 _edge(conn, NodeKind.DOKUMAN, doc["id"], ref.relation, NodeKind.VARLIK, eid, doc["id"], sid, ref.quote)
             refs += 1
 
+        observations = list(ex.observations)
+        if skipped_reviewed:
+            observations.append(f"{skipped_reviewed} kural zaten incelenmiş (ONERILDI dışı) olduğu için "
+                                f"yeniden eklenmedi (çift kayıt önlendi)")
         conn.execute(
             """INSERT INTO extraction_runs(document_id, extractor, source_file, n_rules, n_dropped, n_roles, n_steps,
                                            n_refs, observations) VALUES (?,?,?,?,?,?,?,?,?)""",
             (doc["id"], extractor, path.name, added, dropped, len(ex.roles), len(ex.steps), refs,
-             json.dumps(ex.observations, ensure_ascii=False)))
+             json.dumps(observations, ensure_ascii=False)))
         conn.commit()
     except Exception:
         conn.rollback()
         raise
-    report.counts.update({"eklenen_kural": added, "atilan": dropped})
+    report.counts.update({"eklenen_kural": added, "atilan": dropped, "zaten_incelenmis": skipped_reviewed})
     return report

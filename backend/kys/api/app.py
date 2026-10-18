@@ -13,6 +13,12 @@ Yollar KYS_BASE_PATH altındadır (varsayılan /qa → paktenops.com/qa):
                                Zincir tükenirse 503 {"detail": ..., "code": "MODEL_YOK"}
     GET  /qa/api/processes | processes/{kod}   süreç listesi / adımlar + Mermaid akış metni
     GET  /qa/api/documents/{kod}/pages/{n}.png  PDF sayfası (1 tabanlı)
+    GET  /qa/api/review/summary                Onay Kuyruğu özeti (durum/doküman/tip başına sayı) + "yazilabilir"
+    GET  /qa/api/review/rules                   önerilen (veya seçilen durumdaki) kurallar; ?status=&doc_code=&
+                                               rule_type=&q=&limit=&offset=&include_cancelled=
+    POST /qa/api/review/rules/{id}              {action: ONAYLA|DUZELT|REDDET, note?, reviewer?, edits?} — yalnız
+                                               KYS_WRITABLE=1 iken yazar; kapalıyken 409 {code:"SALT_OKUNUR"}
+    POST /qa/api/review/rules/bulk               {ids:[...], action: ONAYLA|REDDET, note?, reviewer?} (<=200)
     *    /qa/mcp               MCP (Streamable HTTP) — herhangi bir yapay zekâ istemcisi bağlanabilir
 """
 
@@ -32,7 +38,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 
-from .. import config, db
+from .. import config, db, review
 from ..llm import LLMError, LLMUnavailable
 from ..process import decisions, flow, matrix_io
 from ..query import assistant, catalog, pages
@@ -56,6 +62,25 @@ def ensure_db(path: Path, url: str) -> None:
 
 class AskIn(BaseModel):
     question: str
+
+
+class ReviewIn(BaseModel):
+    action: str
+    note: str | None = None
+    reviewer: str | None = None
+    edits: dict | None = None
+
+
+class ReviewBulkIn(BaseModel):
+    ids: list[int]
+    action: str
+    note: str | None = None
+    reviewer: str | None = None
+
+
+def _readonly_response() -> JSONResponse:
+    return JSONResponse(status_code=409, content={
+        "detail": "Bu sunucu salt okunur; onaylar yerel `kys serve` ile yapılır.", "code": "SALT_OKUNUR"})
 
 
 def _token_ok(header: str | None, token: str) -> bool:
@@ -225,6 +250,48 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
     @app.get(f"{base}/api/references", dependencies=guarded)
     def references(c: sqlite3.Connection = Depends(conn)):
         return catalog.unresolved_references(c)
+
+    @app.get(f"{base}/api/review/summary", dependencies=guarded)
+    def review_summary(c: sqlite3.Connection = Depends(conn)):
+        return review.summary(c) | {"yazilabilir": s.writable}
+
+    @app.get(f"{base}/api/review/rules", dependencies=guarded)
+    def review_rules(status: str | None = "ONERILDI", doc_code: str | None = None, rule_type: str | None = None,
+                     q: str | None = None, limit: int = 50, offset: int = 0, include_cancelled: bool = False,
+                     c: sqlite3.Connection = Depends(conn)):
+        return review.list_rules(c, status=status, doc_code=doc_code, rule_type=rule_type, q=q,
+                                 limit=min(max(limit, 1), 200), offset=max(offset, 0),
+                                 include_cancelled=include_cancelled)
+
+    @app.post(f"{base}/api/review/rules/bulk", dependencies=guarded)
+    def review_rules_bulk(body: ReviewBulkIn):
+        if not s.writable:
+            return _readonly_response()
+        if not db_path.exists():
+            raise HTTPException(503, "Veritabanı henüz yüklenmedi")
+        with closing(db.connect(db_path)) as c:
+            try:
+                return {"sonuclar": review.review_bulk(c, body.ids, body.action, note=body.note,
+                                                        reviewer=body.reviewer)}
+            except LookupError as e:
+                raise HTTPException(404, str(e)) from e
+            except ValueError as e:
+                raise HTTPException(422, str(e)) from e
+
+    @app.post(f"{base}/api/review/rules/{{rule_id}}", dependencies=guarded)
+    def review_rule_endpoint(rule_id: int, body: ReviewIn):
+        if not s.writable:
+            return _readonly_response()
+        if not db_path.exists():
+            raise HTTPException(503, "Veritabanı henüz yüklenmedi")
+        with closing(db.connect(db_path)) as c:
+            try:
+                return review.review_rule(c, rule_id, body.action, note=body.note, reviewer=body.reviewer,
+                                          edits=body.edits)
+            except LookupError as e:
+                raise HTTPException(404, str(e)) from e
+            except ValueError as e:
+                raise HTTPException(422, str(e)) from e
 
     @app.post(f"{base}/api/ask", dependencies=guarded)
     def ask(body: AskIn, c: sqlite3.Connection = Depends(conn),

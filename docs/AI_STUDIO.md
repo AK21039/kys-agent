@@ -45,7 +45,6 @@ Bitince README.md'ye çalıştırma adımlarını ve API_BASE ayarını yaz.
 ## Sonraki görev örnekleri (tek seferde bir tane)
 
 - Süreçler ekranında Mermaid düğümüne tıklayınca adım kartını açma ve sayfa vurgulama.
-- "Onay Kuyruğu" ekran taslağı (API hazır olunca: önerilen kuralları onayla/düzelt/reddet).
 - Doküman ayrıntısında "bu dokümana atıf yapanlar" grafiği.
 
 ## Karar Matrisi ekranı (API sözleşmesi)
@@ -91,3 +90,67 @@ devam et; ilerleme çubuğu (işlenen/toplam) ve geçen süre göster. Sonuç ta
 çelişki ayrıntısı (alan: matriste X, dokümanda Y), rol eşleşmeleri ve uyarılar açılır; `dogrulanmamis` olan kaynaklara
 "doğrulanmamış kaynak" etiketi koy. "Excel indir": aynı dosya + `results` (toplanan tüm satırlar) ile `format=xlsx` isteği, yanıtı blob olarak indir.
 Tek satırlık kontrol MCP aracı: `check_decision(karar, yetkili?, onaylayan?, limit?)`.
+
+## Ekran görevi: Onay Kuyruğu
+
+AI Studio'ya (React istemci, `ai` dalı) yapıştırmaya hazır Türkçe prompt. Sunucu tarafı (main) tamamlandı; bu görev
+yalnızca istemci ekranını API'ye bağlar.
+
+```
+Yeni bir ekran ekle: "Onay Kuyruğu". Amaç: sistemin dokümanlardan otomatik çıkardığı kuralların (rules tablosu)
+kullanıcı tarafından tek tek veya toplu olarak ONAYLANMASI, DÜZELTİLEREK onaylanması veya REDDEDİLMESİDİR. Bu
+olmadan hiçbir kural güvenilir sayılmaz (sistem yalnızca ONAYLANDI/DUZELTILDI kurallara dayanarak analiz yapar).
+
+API (API_BASE altında; her istekte Authorization: Bearer <token>; 401 -> token ekranı):
+
+GET {API_BASE}/api/review/summary
+  -> { "durum": {"ONERILDI": 1381, "ONAYLANDI": 0, "DUZELTILDI": 0, "REDDEDILDI": 0},
+       "bekleyen_toplam": 1381,
+       "dokuman_bekleyen": [{"doc_code":"PR-04","doc_revision":"03","doc_title":"...","bekleyen":12}, ...],
+       "tip_bekleyen": {"ONAY": 140, "SURE": 60, ...},
+       "yazilabilir": true|false }
+  "yazilabilir": false ise bu sunucu salt okunurdur (örn. Cloud Run) -> onayla/düzelt/reddet düğmeleri PASİF,
+  ekranın üstünde sabit bir bant göster: "Bu sunucu salt okunur — onaylar yerel `kys serve` ile yapılır."
+
+GET {API_BASE}/api/review/rules?status=ONERILDI&doc_code=&rule_type=&q=&limit=50&offset=0&include_cancelled=false
+  status: ONERILDI (varsayılan, bekleyenler) | ONAYLANDI | DUZELTILDI | REDDEDILDI | "" (tümü)
+  rule_type: ONAY|YETKI|SORUMLULUK|SURE|ESIK|ZORUNLU_KAYIT|ZORUNLU_ADIM|YASAK|TETIKLEYICI|BILGILENDIRME (boş = tümü)
+  q: metinde Türkçe'ye duyarsız arama (statement/quote/condition_text/doküman kodu+başlığı)
+  include_cancelled=true: iptal/taslak dokümanlardaki öneriler de gelir (varsayılan yalnız YURURLUKTE doküman)
+  -> { "toplam": 1381, "kurallar": [{
+        "id": 42, "rule_type": "ONAY", "statement": "...", "quote": "...", "clause_no": "4.2",
+        "condition_text": null, "threshold_op": ">", "threshold_value": 100000, "threshold_unit": "TRY",
+        "action": "onaylar", "object_text": "satınalma talebi", "subject": "Genel Müdür" (veya null),
+        "confidence": 0.9, "extracted_by": "claude-sonnet-5-5",
+        "review_status": "ONERILDI", "reviewed_by": null, "reviewed_at": null, "review_note": null,
+        "doc_code": "PR-04", "doc_revision": "03", "doc_title": "Satınalma Prosedürü", "doc_status": "YURURLUKTE"
+     }, ...] }
+
+POST {API_BASE}/api/review/rules/{id}   body: {"action": "ONAYLA"|"DUZELT"|"REDDET", "note"?: "...", "reviewer"?: "...",
+                                               "edits"?: {"statement":..., "rule_type":..., "threshold_op":...,
+                                                          "threshold_value":..., "threshold_unit":..., "condition_text":...}}
+  Başarı -> güncellenmiş kural (yukarıdaki satır biçiminde). `quote` ASLA edits içinde gönderilmez (kanıt alıntısı
+  değiştirilemez — sunucu 422 ile reddeder). DUZELT en az bir alan ister.
+  Hatalar: 404 (kural yok), 422 {"detail": "..."} (geçersiz eylem/alan/değer — mesajı doğrudan göster),
+  409 {"detail": "...", "code": "SALT_OKUNUR"} (salt okunur sunucu — üstteki bantı göster, işlemi geri al).
+
+POST {API_BASE}/api/review/rules/bulk   body: {"ids": [1,2,3], "action": "ONAYLA"|"REDDET", "note"?, "reviewer"?}
+  En çok 200 id. DUZELT toplu işlemde YOK (yalnız tek tek). -> {"sonuclar": [güncellenmiş kural, ...]}
+  Aynı hata kodları (404/422/409).
+
+UI davranışı:
+- Üstte özet: "N bekliyor" + durum rozetleri (Önerildi gri, Onaylandı yeşil, Düzeltildi sarı, Reddedildi kırmızı) +
+  doküman/tip başına bekleyen sayıları.
+- Süzgeçler: durum (select, varsayılan Önerildi), kural tipi (select), doküman kodu (metin), arama kutusu (metin) —
+  her değişiklikte offset=0 ile yeniden yükle. Sayfalama: "←  X-Y / Toplam  →" (limit örn. 50).
+- Her satır: doküman kodu+revizyon+madde no (tıklanabilir, doküman ayrıntısına gider), kural tipi etiketi, özne rolü,
+  statement, **alıntı (quote) her zaman ayrı ve belirgin gösterilir** (kanıt — kullanıcı kararını buna göre verir),
+  varsa koşul/eşik, confidence/extracted_by küçük not. İncelenmişse kim/ne zaman/not bilgisi.
+- Satır içi işlemler: "Onayla" (tek tıkla, opsiyonel not istemez), "Düzelt" (satır içinde form açılır: statement,
+  rule_type, eşik (op+değer+birim), koşul — **quote alanı formda YOKTUR, düzenlenemez**; "Kaydet"/"Vazgeç"),
+  "Reddet" (opsiyonel not sorulur). Yalnızca ONERILDI durumundaki satırlarda çoklu seçim kutusu olur; seçili satır
+  sayısı + "Toplu Onayla"/"Toplu Reddet" araç çubuğu görünür.
+- `yazilabilir=false` iken tüm onay/düzelt/reddet/toplu düğmeleri devre dışı + üstte sabit uyarı bandı (yukarıda
+  metni verildi). 409 SALT_OKUNUR hatası gelirse aynı bandı göster (sunucu modu araya değişmiş olabilir).
+- Türkçe arayüz, koyu/açık tema, mobilde yatay taşma yok (mevcut diğer ekranlarla aynı tasarım dili).
+```

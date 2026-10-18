@@ -31,6 +31,7 @@ Konteyner salt okunurdur, işlemci gerektirmez (arama SQLite'ta, cevap üretimi 
 | `KYS_REMOTE_TIMEOUT` | `90` | gemini/openai istek zaman aşımı (sn) |
 | `ANTHROPIC_API_KEY` | — | `anthropic:` sağlayıcısı için |
 | `KYS_OPENAI_BASE_URL`, `KYS_OPENAI_API_KEY` | — | `openai:` sağlayıcısı için (OpenAI uyumlu herhangi bir uç nokta) |
+| `KYS_WRITABLE` | — (kapalı) | `1` ise `/api/review/rules*` POST uçları (Onay Kuyruğu: onayla/düzelt/reddet) yazar; kapalıyken 409 `{code:"SALT_OKUNUR"}` döner. Sorgu servisi DB'yi `immutable=1` açtığı için Cloud Run'da **asla** `1` yapılmaz — onaylar yalnızca yerel `kys serve` ile, yazılabilir yerel DB üzerinde yapılır |
 | `PORT` | `8080` | Platform belirler (Cloud Run vb.) |
 
 ### Model zinciri, BYOK ve CORS
