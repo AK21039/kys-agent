@@ -607,3 +607,40 @@ def test_api_chunks_span_sheets(client, monkeypatch):
     r1 = _upload(client, data=multi_sheet_bytes(), params={"offset": 1, "limit": 3}).json()
     assert [(x["sayfa"], x["satir"]) for x in r1["satirlar"]] == [("Proje ve Yatırım", 3), ("Üretim", 2), ("Üretim", 3)]
     assert r1["aralik"]["toplam"] == 5 and len(r1["matris"]["sayfalar"]) == 2
+
+
+# --- CLI: --sayfa / --ekle (kısmi koşuyu tamamlama) --------------------------------------------------------------
+
+def test_cli_karar_sayfa_and_ekle_resume(kb, monkeypatch, tmp_path):
+    import argparse
+    import json
+
+    from kys import cli
+
+    wb = openpyxl.Workbook()
+    wb.active.title = "Diğer"
+    for r in FLAT:
+        wb.active.append(r)
+    ws = wb.create_sheet("Proje ve Yatırım")
+    for r in FLAT:
+        ws.append(r)
+    src = tmp_path / "matris.xlsx"
+    wb.save(str(src))
+    calls: list[str] = []
+    fake_llm(monkeypatch, [pick()], calls=calls)
+
+    def args(**kw):
+        return argparse.Namespace(**({"sayfa": "proje ve yatirim", "ekle": None, "limit": None} | kw))
+
+    first = cli._karar_analyze(kb, src, args(limit=1), None)
+    assert [r["sayfa"] for r in first.rows] == ["Proje ve Yatırım"] and first.summary["toplam_satir"] == 2
+    part = tmp_path / "ilk.json"
+    part.write_text(json.dumps(first.to_json(), ensure_ascii=False), encoding="utf-8")
+    n_first = len(calls)
+
+    full = cli._karar_analyze(kb, src, args(ekle=str(part)), None)
+    assert len(full.rows) == 2 and full.summary["kontrol_edilen"] == 2
+    assert full.rows[0] == json.loads(part.read_text(encoding="utf-8"))["satirlar"][0]  # önceki satır aynen korunur
+    assert len(calls) - n_first <= 1                                                    # yalnız kalan satır işlendi
+    with pytest.raises(MatrixError):
+        cli._karar_analyze(kb, src, args(sayfa="Yok"), None)

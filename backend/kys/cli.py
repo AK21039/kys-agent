@@ -486,6 +486,32 @@ def cmd_rol_onayla(args) -> None:
           f"\nKararlar: {settings.role_merges_path}")
 
 
+def _karar_analyze(conn, src: Path, args, progress):
+    """--sayfa ile tek sayfa; --ekle ile önceki (kısmi) JSON'daki satırlar korunur, yalnız kalanlar işlenir."""
+    from .process import decisions
+    from .textnorm import fold
+    parsed = decisions.load_matrix(src.read_bytes(), src.name)
+    rows = parsed.rows
+    if args.sayfa:
+        rows = [r for r in rows if fold(r.sheet or "") == fold(args.sayfa)]
+        if not rows:
+            raise decisions.MatrixError(f"'{args.sayfa}' sayfasında karar satırı yok")
+    total = len(rows)
+    prev: list[dict] = []
+    if args.ekle:
+        prev = json.loads(Path(args.ekle).read_text(encoding="utf-8")).get("satirlar") or []
+        valid = {(r.sheet, r.sheet_row) for r in rows}
+        prev = [p for p in prev if (p.get("sayfa"), p.get("satir")) in valid]
+        done = {(p.get("sayfa"), p.get("satir")) for p in prev}
+        rows = [r for r in rows if (r.sheet, r.sheet_row) not in done]
+        print(f"  önceki sonuçtan {len(prev)} satır korunuyor, {len(rows)} satır işlenecek", file=sys.stderr)
+    if args.limit:
+        rows = rows[:args.limit]
+    results = prev + decisions.check_rows(conn, rows, progress=progress)
+    results.sort(key=lambda x: ((x.get("sayfa") or ""), x["satir"]))
+    return decisions.MatrixResult(parsed, results, decisions.summarize(results, total=total))
+
+
 def cmd_karar_kontrol(args) -> None:
     from .llm import LLMError
     from .process import decisions
@@ -498,7 +524,7 @@ def cmd_karar_kontrol(args) -> None:
         print(f"\r  {done}/{total} satır", end="", file=sys.stderr, flush=True)
 
     try:
-        res = decisions.analyze_matrix(conn, src.read_bytes(), src.name, limit=args.limit, progress=progress)
+        res = _karar_analyze(conn, src, args, progress)
     except decisions.MatrixError as e:
         sys.exit(f"Matris okunamadı: {e}")
     except LLMError as e:
@@ -529,6 +555,35 @@ def cmd_karar_kontrol(args) -> None:
     print(f"Excel: {out}")
 
 
+def cmd_analiz(args) -> None:
+    """Deterministik (LLM'siz) çelişki/boşluk taraması (Faz 3 katman 1). --kaydet olmadan DB'ye yazmaz."""
+    from .analysis import render_report, run_checks, save_findings
+    conn = _conn() if args.kaydet else (db.connect(readonly=True) if settings.db_path.exists() else _conn())
+    try:
+        outcomes = run_checks(conn, args.kontrol)
+    except ValueError as e:
+        sys.exit(str(e))
+    report = render_report(outcomes)
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report, encoding="utf-8")
+        print(f"Rapor: {out}")
+    else:
+        print(report)
+    if args.json:
+        payload = {name: {"incelenen": o.considered, "not": o.note, "bulgular": [f.to_dict() for f in o.findings]}
+                  for name, o in outcomes.items()}
+        Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"JSON: {args.json}")
+    total = sum(len(o.findings) for o in outcomes.values())
+    print(f"\n{total} bulgu, {len(outcomes)} kontrol çalıştı.", file=sys.stderr)
+    if args.kaydet:
+        res = save_findings(conn, outcomes)
+        print(f"Kaydedildi: run #{res['run_id']} — {res['yeni']} yeni, {res['guncellenen']} güncellendi.",
+              file=sys.stderr)
+
+
 def cmd_stats(args) -> None:
     conn = _conn()
     for r in conn.execute(
@@ -536,6 +591,21 @@ def cmd_stats(args) -> None:
                   SUM(cache_read_tokens) c FROM llm_calls GROUP BY purpose, model"""):
         print(f"{r['purpose']:<16} {r['model']:<20} çağrı={r['n']} başarılı={r['ok']} "
               f"girdi={r['i'] or 0} çıktı={r['o'] or 0} önbellek={r['c'] or 0}")
+
+
+def cmd_arama_olc(args) -> None:
+    """Altın soru setiyle arama geri getirmesini ölç (hit@5, hit@10, MRR). DB'ye yazmaz."""
+    from .query import search_eval
+    set_path = Path(args.set) if args.set else search_eval.VARSAYILAN_SET
+    if not set_path.is_file():
+        sys.exit(f"Altın soru seti yok: {set_path}")
+    gold = search_eval.load_gold(set_path)
+    conn = db.connect(readonly=True)
+    result = search_eval.run(conn, gold, k=args.k)
+    if args.json:
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(search_eval.format_text(result))
 
 
 def main(argv=None) -> None:
@@ -632,6 +702,8 @@ def main(argv=None) -> None:
     s.add_argument("--out", help="sonuç Excel dosyası (varsayılan: <dosya>_kontrol.xlsx)")
     s.add_argument("--json", help="sonuçları JSON olarak da yaz")
     s.add_argument("--limit", type=int, help="yalnızca ilk N karar satırını işle")
+    s.add_argument("--sayfa", help="yalnız bu sayfayı işle (ör. \"Proje ve Yatırım\")")
+    s.add_argument("--ekle", help="önceki kısmi --json çıktısı: oradaki satırlar korunur, yalnız kalanlar işlenir")
     s.set_defaults(fn=cmd_karar_kontrol)
     s = sub.add_parser("rol-grupla", help="aynı rolün yazım varyantlarını grupla, onay Excel'i üret (yazmaz)")
     from .ontology import EntityType
@@ -644,7 +716,19 @@ def main(argv=None) -> None:
     s.add_argument("file")
     s.add_argument("--apply", action="store_true")
     s.set_defaults(fn=cmd_rol_onayla)
+    s = sub.add_parser("analiz", help="deterministik çelişki/boşluk taraması (Faz 3 katman 1); --kaydet olmadan DB'ye yazmaz")
+    from .analysis import CHECK_REGISTRY
+    s.add_argument("--kontrol", nargs="+", choices=list(CHECK_REGISTRY), help="yalnızca verilen kontrolleri çalıştır")
+    s.add_argument("--kaydet", action="store_true", help="bulguları analysis_runs + findings'e yaz (fingerprint ile upsert)")
+    s.add_argument("--out", help="rapor Markdown dosyası (varsayılan: ekrana)")
+    s.add_argument("--json", help="sonuçları JSON olarak da yaz")
+    s.set_defaults(fn=cmd_analiz)
     sub.add_parser("stats", help="LLM kullanım istatistikleri").set_defaults(fn=cmd_stats)
+    s = sub.add_parser("arama-olc", help="altın soru setiyle arama geri getirmesini ölç (hit@5/10, MRR); DB'ye yazmaz")
+    s.add_argument("--set", help="altın soru seti JSON (varsayılan: data/eval/arama_altin.json)")
+    s.add_argument("--k", type=int, default=10)
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_arama_olc)
     args = p.parse_args(argv)
     args.fn(args)
 
