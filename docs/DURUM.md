@@ -1,4 +1,4 @@
-# KYS Agent — Durum ve Devir Notu (2026-10-16)
+# KYS Agent — Durum ve Devir Notu (2026-10-18)
 
 Yeni bir oturum bu dosyayla başlar. Ayrıntı: [PLAN.md](PLAN.md) (fazlar), [DEPLOY.md](DEPLOY.md) (yayın),
 [AI_STUDIO.md](AI_STUDIO.md) (ai dalı ve API sözleşmeleri), [../CLAUDE.md](../CLAUDE.md) (kurallar, komutlar).
@@ -57,19 +57,39 @@ rol birleştirme gerekiyor. Diğer sayfalar (Planlama, Satınalma, Üretim) ilgi
 - Terfi onayı: PR.İK-07 (Üst Yönetim) ↔ PR.İK-13 (İCKB/YK); terfi kriterleri çelişkisi.
 - Görev tanımları: kopya şablonlar, unvan varyantları, vekalet döngüleri, yetki/bütçe alanları boş.
 
+## 2026-10-18 gece çalışması (yapılanlar)
+
+- **Rol birleştirme uygulandı** (279 → 267 rol; ayrıntı aşağıda). Karar matrisi ("Proje ve Yatırım") yeniden koşuldu:
+  Gemini ücretsiz kotası 12/46 satırda doldu (429). İlk 12 satır: KISMİ 10, KAYNAK YOK 2, KAYNAKLI 0; 11 satır önceki
+  koşuyla aynı (satır 12 ÇELİŞKİ→KAYNAK YOK, model farkı). Sonuç: rol birleştirme tek başına KAYNAKLI'yı artırmıyor, çünkü
+  karar verici birim adı ("Yatırım ve Bakım"). Darboğaz birim ↔ yönetici eşlemesi. Kısmi sonuç:
+  `%LOCALAPPDATA%\kys-tmp\karar-gemini.json` (bakım PC'si). Kalan 34 satır kullanıcı PC'sinde Ollama ile
+  `karar-kontrol --sayfa ... --ekle ...` komutuyla tamamlanacak.
+- **Onay Kuyruğu** (`review.py`, `/api/review/*`, `/qa/` "Onay Kuyruğu" sekmesi): onayla/düzelt/reddet + toplu işlem;
+  alıntı düzenlenemez. Yazma yalnız `KYS_WRITABLE=1` ile yerel `kys serve`'de; Cloud Run salt okunur (409 `SALT_OKUNUR`).
+  extract-import artık incelenmiş kuralın ONERILDI ikizini açmıyor. AI Studio ekran promptu: AI_STUDIO.md.
+- **Analiz motoru** (`kys analiz`, `backend/kys/analysis/`): 8 deterministik kontrol. Test DB kopyasında 675 bulgu:
+  kırık referans 62, sorumlusuz süreç adımı 211, görev tanımı eksik 88 (+155 BELİRSİZLİK), kullanılmayan rol 152
+  BELİRSİZLİK (kaynağı izlenemeyen rol), eşik çakışması 1, mükerrer doküman 6 çift (ME-TL-001/YP-TL-001,
+  ME-TL-005/YP-TL-002, ME-TL-006/YP-TL-003, ME-TL-007/ME-TL-008, GT-176/GT-186, GT-188/GT-171), iptal dokümana atıf 0,
+  karar-yetki: veri yok. Bulgular DB'ye yazılmadı (`--kaydet` ile yazılır; henüz API/ekran yok).
+- **Arama**: yakınlık + başlık örtüşmesiyle yeniden sıralama. Altın set (`data/eval/arama_altin.json`, 18 soru)
+  MRR 0.903 → 0.972; çok anlamlı alt küme 0.932 → 1.000. Ölçüm: `kys arama-olc`.
+- **Cloudflare**: `qa.pakten.workers.dev` HTTP ile 404 / error 1042 döndürüyor (var olmayan worker'la aynı) → kapalı
+  doğrulandı. `qa.paktenops.com` Access girişine yönlendiriyor.
+
 ## Açık işler (öncelik sırasıyla)
 
-1. **Rol birleştirme (Faz 3 ilk adım):** kod hazır (2026-10-16, `process/role_merge.py`, `tests/test_role_merge.py`):
-   `kys rol-grupla` → `data/rol_gruplari.xlsx` (KARAR EVET/HAYIR, ANA AD) → `kys rol-onayla DOSYA` (önizleme) →
-   `--apply`. Eski adlar ana rolün takma adı olur, tüm atıflar (kural, süreç, adım, karar, onay zinciri, kenar) taşınır;
-   karar kontrolü (`RoleIndex`) takma adları zaten okuyor. Kararlar `data/kys_role_merges.json` (DB dışında).
-   **Uygulandı (2026-10-18):** 19 aday gruptan 11'i birleşti (12 varlık, 64 atıf, 8 takma ad; 279 → 267 rol); Müdür/Yönetici ve Üst Yönetim/Üst Yönetici ayrı kaldı. Canlı DB ve Cloud Run yayını (`kys-qa-00012`) güncel. **Bekleyen:** karar matrisini yeniden koşma.
-   Sonraki adım: birim ↔ yönetici (örn. "Yatırım ve Bakım" ↔ "Yatırımlar ve Bakım Direktörü") onaylı eşlemesi.
-2. **Onay Kuyruğu:** 1381 `ONERILDI` kuralın onay/düzelt/reddet ekranı (API + `/qa/` sekmesi; AI Studio'ya ekran görevi).
-3. Kodsuz 9 prosedürün kod ve yürürlük durumu (kullanıcıdan); PR11-SA-2/3/4 dokümanlarının yüklenmesi.
-4. Analiz motoru: deterministik çelişki/boşluk taramaları, bulgu raporu.
-5. Arama: "kaynak" (kaynak işi/doküman kaynağı) gibi çok anlamlı terimlerde geri getirme zayıf.
-6. Cloudflare: Worker `KYS_TOKEN` tanımlandı (2026-10-18, tek anahtar). workers.dev adresinin kapatıldığı doğrulanmadı.
+1. **Karar matrisi kalan 34 satır** (Ollama, kullanıcı PC'si), ardından **birim ↔ yönetici onaylı eşlemesi**
+   (örn. "Yatırım ve Bakım" ↔ "Yatırımlar ve Bakım Direktörü"; `data/birim_gruplari.xlsx` başlangıç olabilir).
+   Rol birleştirme kodu: `process/role_merge.py`, kararlar `data/kys_role_merges.json`.
+2. **Onay Kuyruğu kullanımı:** 1381 kuralın incelenmesi kullanıcı PC'sinde (`KYS_WRITABLE=1 kys serve`), sonra yayın.
+   AI Studio arayüzüne ekranın eklenmesi (`ai` dalı, prompt AI_STUDIO.md'de).
+3. Kodsuz 9 prosedürün kodu/yürürlük bilgisi ve PR11-SA-2/3/4 dokümanları (kullanıcıdan). Not: 9 kodsuz taslak DB'de
+   `YURURLUKTE` görünüyor; analiz ve karar kontrolüne giriyorlar.
+4. Analiz motoru 2. katman: bulguların DB'ye kaydı + Denetim Radarı (API/ekran), aday kümeler + LLM yargısı.
+   BELİRSİZLİK'teki 307 rolün çoğu rol birleştirme ve onay kuyruğuyla azalır.
+5. Arama: SZ-İSG-01 md.16 tek uzun blok olarak bölümlenmiş, "kaynak izni" sorgusunda ilk 10'a girmiyor (ingest bölümleme sorunu).
 
 ## Çalışma kuralları (kullanıcı tercihleri)
 
