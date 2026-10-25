@@ -8,6 +8,7 @@ import { SearchTab } from './components/SearchTab';
 import { DocsTab } from './components/DocsTab';
 import { DocDetailTab } from './components/DocDetailTab';
 import { ProcessesTab } from './components/ProcessesTab';
+import { ReviewQueueTab } from './components/ReviewQueueTab';
 import { RefsTab } from './components/RefsTab';
 import { SettingsModal } from './components/SettingsModal';
 
@@ -60,7 +61,6 @@ export const App: React.FC = () => {
       if (s.status === 'fulfilled') {
         setStats(s.value);
       } else {
-        // If stats failed, it could be 401 or network
         setStats(null);
       }
     } catch (e) {
@@ -114,6 +114,7 @@ export const App: React.FC = () => {
           currentTab={currentTab}
           onSelectTab={setCurrentTab}
           activeDocCode={activeDocCode}
+          pendingRulesCount={stats?.pending_rules}
         />
 
         {currentTab === 'ask' && (
@@ -133,6 +134,13 @@ export const App: React.FC = () => {
 
         {currentTab === 'processes' && (
           <ProcessesTab onOpenDoc={handleOpenDoc} />
+        )}
+
+        {currentTab === 'review' && (
+          <ReviewQueueTab
+            onOpenDoc={handleOpenDoc}
+            onStatsChanged={refreshData}
+          />
         )}
 
         {currentTab === 'refs' && (

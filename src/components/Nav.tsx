@@ -1,15 +1,21 @@
 import React from 'react';
-import { MessageSquare, Search, FileText, GitBranch, AlertTriangle, BookOpen } from 'lucide-react';
+import { MessageSquare, Search, FileText, GitBranch, AlertTriangle, BookOpen, ShieldCheck } from 'lucide-react';
 
-export type TabType = 'ask' | 'search' | 'docs' | 'processes' | 'refs' | 'doc';
+export type TabType = 'ask' | 'search' | 'docs' | 'processes' | 'review' | 'refs' | 'doc';
 
 interface NavProps {
   currentTab: TabType;
   onSelectTab: (tab: TabType) => void;
   activeDocCode: string | null;
+  pendingRulesCount?: number;
 }
 
-export const Nav: React.FC<NavProps> = ({ currentTab, onSelectTab, activeDocCode }) => {
+export const Nav: React.FC<NavProps> = ({
+  currentTab,
+  onSelectTab,
+  activeDocCode,
+  pendingRulesCount = 0,
+}) => {
   return (
     <nav aria-label="Ana Menü">
       <button
@@ -46,6 +52,31 @@ export const Nav: React.FC<NavProps> = ({ currentTab, onSelectTab, activeDocCode
       >
         <GitBranch size={16} />
         <span>Süreçler</span>
+      </button>
+
+      <button
+        type="button"
+        className={currentTab === 'review' ? 'active' : ''}
+        onClick={() => onSelectTab('review')}
+        style={{ position: 'relative' }}
+      >
+        <ShieldCheck size={16} />
+        <span>Onay Kuyruğu</span>
+        {pendingRulesCount > 0 && (
+          <span
+            style={{
+              backgroundColor: 'var(--warn)',
+              color: '#fff',
+              borderRadius: '10px',
+              padding: '1px 6px',
+              fontSize: '11px',
+              fontWeight: 700,
+              marginLeft: 4,
+            }}
+          >
+            {pendingRulesCount}
+          </span>
+        )}
       </button>
 
       <button

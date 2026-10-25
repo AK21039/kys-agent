@@ -7,6 +7,7 @@ export interface HealthResponse {
 export interface StatsResponse {
   documents: number;
   rules?: number;
+  pending_rules?: number;
   processes?: number;
   sections?: number;
   unresolved_references?: number;
@@ -132,4 +133,55 @@ export interface AskResponse {
 export interface ModelYokErrorResponse {
   detail: string;
   code: 'MODEL_YOK';
+}
+
+export type RuleStatus = 'ONERILDI' | 'ONAYLANDI' | 'DUZELTILDI' | 'REDDEDILDI';
+
+export type RuleType =
+  | 'ONAY'
+  | 'YETKI'
+  | 'SORUMLULUK'
+  | 'SURE'
+  | 'ESIK'
+  | 'ZORUNLU_KAYIT'
+  | 'ZORUNLU_ADIM'
+  | 'YASAK'
+  | 'TETIKLEYICI'
+  | 'BILGILENDIRME';
+
+export interface RuleSource {
+  document: string;
+  revision?: string;
+  clause?: string | null;
+  quote: string;
+}
+
+export interface RuleThreshold {
+  value: number;
+  unit: string;
+  op: string;
+}
+
+export interface RuleItem {
+  id: number;
+  rule_type: RuleType;
+  subject: string;
+  action: string;
+  object: string;
+  condition?: string | null;
+  threshold?: RuleThreshold | null;
+  source: RuleSource;
+  status: RuleStatus;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface EntityResolutionItem {
+  id: number;
+  canonical_name: string;
+  entity_type: 'ROL' | 'BIRIM';
+  aliases: string[];
+  status: RuleStatus;
+  sources?: { document: string; clause?: string | null }[];
 }

@@ -63,8 +63,13 @@ Uygulama açıldığında sağ üstteki **"Ayarlar"** düğmesine tıklayarak ve
    - `mermaid` kütüphanesiyle dinamik akış diyagramı çizimi.
    - Yan yana çift kolonlu görünüm: Mermaid şeması ve PDF sayfa görüntüsü.
    - Süreç adımlarına tıklandığında adıma ait kanıt alıntısı ve sayfa numarası anında açılır.
-6. **Eksik Atıflar:**
+6. **Onay Kuyruğu (Faz 1 - İnsan Onayı):**
+   - LLM tarafından çıkarılan kural ve varlık önerilerinin incelenmesi (`ONERILDI → ONAYLANDI / DUZELTILDI / REDDEDILDI`).
+   - Çıkarılan kural yapısı ile kaynak dokümanın birebir alıntısının yan yana denetlenmesi.
+   - Tek tıkla onaylama, modal üzerinden düzeltme ve gerekçeli ret imkanı.
+   - Ajan 1.3 tarafından önerilen eş anlamlı rol ve birim adlarının (kanonik ad) tekilleştirilmesi.
+7. **Eksik Atıflar:**
    - Atıfta bulunulmuş fakat bilgi tabanında henüz tam metni yer almayan doküman kodları.
-7. **Koyu / Açık Tema:**
+8. **Koyu / Açık Tema:**
    - Sistem tercihine duyarlı, tek tıkla değiştirilebilir koyu ve açık tema desteği.
    - Mobil ve masaüstü tam uyumluluk (yatay taşma/kaydırma engellenmiştir).

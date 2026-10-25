@@ -8,6 +8,8 @@ import {
   SearchResult,
   ReferencesResponse,
   AskResponse,
+  RuleItem,
+  EntityResolutionItem,
 } from '../types/kys';
 
 const STORAGE_KEY_API_BASE = 'kys_api_base';
@@ -330,6 +332,91 @@ export const kysApi = {
       throw new Error(errorMsg);
     }
 
+    return res.json();
+  },
+
+  async getRules(params?: {
+    status?: string;
+    doc_code?: string;
+    rule_type?: string;
+    limit?: number;
+  }): Promise<RuleItem[]> {
+    const q = new URLSearchParams();
+    if (params?.status && params.status !== 'HEPSI') q.set('status', params.status);
+    if (params?.doc_code) q.set('doc_code', params.doc_code);
+    if (params?.rule_type && params.rule_type !== 'HEPSI') q.set('rule_type', params.rule_type);
+    if (params?.limit) q.set('limit', String(params.limit));
+
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    const res = await fetchWithAuth(`/api/rules${qs}`);
+    if (!res.ok) {
+      throw new Error(`Kurallar alınamadı (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async approveRule(id: number): Promise<RuleItem> {
+    const res = await fetchWithAuth(`/api/rules/${id}/approve`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      throw new Error(`Kural onaylama başarısız (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async rejectRule(id: number, reason?: string): Promise<RuleItem> {
+    const res = await fetchWithAuth(`/api/rules/${id}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    if (!res.ok) {
+      throw new Error(`Kural reddetme başarısız (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async updateRule(id: number, updates: Partial<RuleItem>): Promise<RuleItem> {
+    const res = await fetchWithAuth(`/api/rules/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) {
+      throw new Error(`Kural güncelleme başarısız (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async getEntityResolutions(status?: string): Promise<EntityResolutionItem[]> {
+    const q = status && status !== 'HEPSI' ? `?status=${encodeURIComponent(status)}` : '';
+    const res = await fetchWithAuth(`/api/entities/resolutions${q}`);
+    if (!res.ok) {
+      throw new Error(`Varlık eşlemeleri alınamadı (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async approveEntityResolution(id: number): Promise<EntityResolutionItem> {
+    const res = await fetchWithAuth(`/api/entities/resolutions/${id}/approve`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      throw new Error(`Varlık eşleme onaylanamadı (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async updateEntityResolution(id: number, canonicalName: string): Promise<EntityResolutionItem> {
+    const res = await fetchWithAuth(`/api/entities/resolutions/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ canonical_name: canonicalName }),
+    });
+    if (!res.ok) {
+      throw new Error(`Varlık eşleme güncellenemedi (${res.status})`);
+    }
     return res.json();
   },
 };
