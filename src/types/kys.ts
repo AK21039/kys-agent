@@ -217,3 +217,67 @@ export interface ImportSummaryResponse {
   message?: string;
 }
 
+export type FindingType =
+  | 'CAKISMA'
+  | 'BOSLUK'
+  | 'GUNCELLIK'
+  | 'YETKI_ASIMI'
+  | 'EKSIK_ONAY'
+  | 'UYGUNSUZLUK'
+  | 'BELIRSIZLIK';
+
+export type SeverityType = 'KRITIK' | 'ORTA' | 'DUSUK';
+
+export type FindingStatus = 'ACIK' | 'KABUL' | 'YANLIS_POZITIF' | 'COZULDU';
+
+export interface FindingItem {
+  id: number;
+  finding_type: FindingType;
+  severity: SeverityType;
+  status: FindingStatus;
+  title: string;
+  description: string;
+  document_code?: string | null;
+  process_code?: string | null;
+  rule_id?: number | null;
+  evidence_quote?: string | null;
+  resolution_notes?: string | null;
+  created_at?: string;
+}
+
+export interface AuditRunResponse {
+  ok: boolean;
+  run_id: string;
+  findings_count: number;
+  critical_count: number;
+  medium_count: number;
+  low_count: number;
+  timestamp: string;
+}
+
+export type ComplianceVerdict = 'UYGUN' | 'SARTLI_UYGUN' | 'UYGUN_DEGIL';
+
+export interface ComplianceCheckRequest {
+  task_description: string;
+  department?: string;
+  budget?: number;
+}
+
+export interface ComplianceCheckResponse {
+  verdict: ComplianceVerdict;
+  summary: string;
+  required_approvals: {
+    role: string;
+    condition?: string;
+    rule_id?: number;
+  }[];
+  required_forms: {
+    form_code: string;
+    form_name: string;
+  }[];
+  required_steps: string[];
+  citations: Citation[];
+  model?: string;
+}
+
+

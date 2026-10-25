@@ -9,6 +9,8 @@ import { DocsTab } from './components/DocsTab';
 import { DocDetailTab } from './components/DocDetailTab';
 import { ProcessesTab } from './components/ProcessesTab';
 import { ReviewQueueTab } from './components/ReviewQueueTab';
+import { AuditRadarTab } from './components/AuditRadarTab';
+import { SandboxTab } from './components/SandboxTab';
 import { RefsTab } from './components/RefsTab';
 import { SettingsModal } from './components/SettingsModal';
 
@@ -141,6 +143,17 @@ export const App: React.FC = () => {
             onOpenDoc={handleOpenDoc}
             onStatsChanged={refreshData}
           />
+        )}
+
+        {currentTab === 'radar' && (
+          <AuditRadarTab
+            onOpenDoc={handleOpenDoc}
+            onStatsChanged={refreshData}
+          />
+        )}
+
+        {currentTab === 'sandbox' && (
+          <SandboxTab onOpenDoc={handleOpenDoc} />
         )}
 
         {currentTab === 'refs' && (

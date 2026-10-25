@@ -69,8 +69,16 @@ Uygulama açıldığında sağ üstteki **"Ayarlar"** düğmesine tıklayarak ve
    - Çıkarılan kural yapısı ile kaynak dokümanın birebir alıntısının yan yana denetlenmesi.
    - Tek tıkla onaylama, modal üzerinden düzeltme ve gerekçeli ret imkanı.
    - Ajan 1.3 tarafından önerilen eş anlamlı rol ve birim adlarının (kanonik ad) tekilleştirilmesi.
-7. **Eksik Atıflar:**
+7. **Denetim Radarı (Faz 3 - Analiz Motoru):**
+   - Deterministik SQL ve LLM yargıçlarıyla sistemdeki yetki aşımı, kural çakışması, iptal forma atıflar ve süreç boşluklarının taranması.
+   - Kritik, Orta ve Düşük seviye bulguların izlenmesi ve durum yönetimi (Açık, Kabul, Yanlış Pozitif, Çözüldü).
+   - "Tüm Sistemi Denetle" tetikleyicisi.
+8. **Uygunluk Kum Havuzu (Faz 3 - Ajan 3.1):**
+   - Operasyonel veya satınalma kararlarının KYS prosedürlerine uygunluk simülasyonu.
+   - UYGUN / ŞARTLI UYGUN / UYGUN DEĞİL kararı, zorunlu onay makamları, zorunlu formlar ve adımlar.
+9. **Eksik Atıflar:**
    - Atıfta bulunulmuş fakat bilgi tabanında henüz tam metni yer almayan doküman kodları.
-8. **Koyu / Açık Tema:**
+10. **Koyu / Açık Tema:**
    - Sistem tercihine duyarlı, tek tıkla değiştirilebilir koyu ve açık tema desteği.
    - Mobil ve masaüstü tam uyumluluk (yatay taşma/kaydırma engellenmiştir).
+

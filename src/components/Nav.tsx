@@ -1,13 +1,33 @@
 import React from 'react';
-import { MessageSquare, Search, FileText, GitBranch, AlertTriangle, BookOpen, ShieldCheck } from 'lucide-react';
+import {
+  MessageSquare,
+  Search,
+  FileText,
+  GitBranch,
+  AlertTriangle,
+  BookOpen,
+  ShieldCheck,
+  ShieldAlert,
+  Sparkles,
+} from 'lucide-react';
 
-export type TabType = 'ask' | 'search' | 'docs' | 'processes' | 'review' | 'refs' | 'doc';
+export type TabType =
+  | 'ask'
+  | 'search'
+  | 'docs'
+  | 'processes'
+  | 'review'
+  | 'radar'
+  | 'sandbox'
+  | 'refs'
+  | 'doc';
 
 interface NavProps {
   currentTab: TabType;
   onSelectTab: (tab: TabType) => void;
   activeDocCode: string | null;
   pendingRulesCount?: number;
+  criticalFindingsCount?: number;
 }
 
 export const Nav: React.FC<NavProps> = ({
@@ -15,6 +35,7 @@ export const Nav: React.FC<NavProps> = ({
   onSelectTab,
   activeDocCode,
   pendingRulesCount = 0,
+  criticalFindingsCount = 0,
 }) => {
   return (
     <nav aria-label="Ana Menü">
@@ -77,6 +98,40 @@ export const Nav: React.FC<NavProps> = ({
             {pendingRulesCount}
           </span>
         )}
+      </button>
+
+      <button
+        type="button"
+        className={currentTab === 'radar' ? 'active' : ''}
+        onClick={() => onSelectTab('radar')}
+        style={{ position: 'relative' }}
+      >
+        <ShieldAlert size={16} />
+        <span>Denetim Radarı</span>
+        {criticalFindingsCount > 0 && (
+          <span
+            style={{
+              backgroundColor: 'var(--danger)',
+              color: '#fff',
+              borderRadius: '10px',
+              padding: '1px 6px',
+              fontSize: '11px',
+              fontWeight: 700,
+              marginLeft: 4,
+            }}
+          >
+            {criticalFindingsCount}
+          </span>
+        )}
+      </button>
+
+      <button
+        type="button"
+        className={currentTab === 'sandbox' ? 'active' : ''}
+        onClick={() => onSelectTab('sandbox')}
+      >
+        <Sparkles size={16} />
+        <span>Kum Havuzu</span>
       </button>
 
       <button

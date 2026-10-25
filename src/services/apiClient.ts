@@ -13,6 +13,10 @@ import {
   DecisionItem,
   ClauseMatchSuggestion,
   ImportSummaryResponse,
+  FindingItem,
+  AuditRunResponse,
+  ComplianceCheckRequest,
+  ComplianceCheckResponse,
 } from '../types/kys';
 
 const STORAGE_KEY_API_BASE = 'kys_api_base';
@@ -536,6 +540,82 @@ export const kysApi = {
 
     if (!res.ok) {
       let errMsg = `Karar Excel içe aktarma başarısız (${res.status})`;
+      try {
+        const j = await res.json();
+        if (j.detail) errMsg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+      } catch {
+        // ignore
+      }
+      throw new Error(errMsg);
+    }
+    return res.json();
+  },
+
+  async getFindings(params?: {
+    status?: string;
+    severity?: string;
+    finding_type?: string;
+    limit?: number;
+  }): Promise<FindingItem[]> {
+    const q = new URLSearchParams();
+    if (params?.status && params.status !== 'HEPSI') q.set('status', params.status);
+    if (params?.severity && params.severity !== 'HEPSI') q.set('severity', params.severity);
+    if (params?.finding_type && params.finding_type !== 'HEPSI') q.set('finding_type', params.finding_type);
+    if (params?.limit) q.set('limit', String(params.limit));
+
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    const res = await fetchWithAuth(`/api/findings${qs}`);
+    if (!res.ok) {
+      throw new Error(`Bulgular alınamadı (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async runAuditAnalysis(): Promise<AuditRunResponse> {
+    const res = await fetchWithAuth('/api/analysis/run', {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      throw new Error(`Denetim analizi çalıştırılamadı (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async updateFindingStatus(
+    id: number,
+    status: string,
+    notes?: string
+  ): Promise<FindingItem> {
+    const res = await fetchWithAuth(`/api/findings/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, resolution_notes: notes }),
+    });
+    if (!res.ok) {
+      throw new Error(`Bulgu durumu güncellenemedi (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async checkCompliance(req: ComplianceCheckRequest): Promise<ComplianceCheckResponse> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    const sessionLlm = getLlmSessionConfig();
+    if (sessionLlm?.provider && sessionLlm?.key) {
+      headers['X-LLM-Provider'] = sessionLlm.provider;
+      headers['X-LLM-Key'] = sessionLlm.key;
+    }
+
+    const res = await fetchWithAuth('/api/compliance/check', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(req),
+    });
+
+    if (!res.ok) {
+      let errMsg = `Uygunluk denetimi başarısız (${res.status})`;
       try {
         const j = await res.json();
         if (j.detail) errMsg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
