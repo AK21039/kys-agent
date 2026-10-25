@@ -1,0 +1,12 @@
+steps:
+  # 1. Adım: Dockerfile'ınızı kullanarak imajı build eder
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/uygulamam:$COMMIT_SHA', '.']
+
+  # 2. Adım: Build edilen imajı Google Container Registry'ye yükler
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/uygulamam:$COMMIT_SHA']
+
+# Sizi kilitleyen hatayı çözen kritik ayar:
+options:
+  logging: CLOUD_LOGGING_ONLY
