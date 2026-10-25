@@ -17,6 +17,7 @@ import {
   AuditRunResponse,
   ComplianceCheckRequest,
   ComplianceCheckResponse,
+  ImpactAnalysisResponse,
 } from '../types/kys';
 
 const STORAGE_KEY_API_BASE = 'kys_api_base';
@@ -623,6 +624,14 @@ export const kysApi = {
         // ignore
       }
       throw new Error(errMsg);
+    }
+    return res.json();
+  },
+
+  async getImpactAnalysis(code: string): Promise<ImpactAnalysisResponse> {
+    const res = await fetchWithAuth(`/api/documents/${encodeURIComponent(code)}/impact`);
+    if (!res.ok) {
+      throw new Error(`Etki analizi alınamadı (${res.status}): ${code}`);
     }
     return res.json();
   },

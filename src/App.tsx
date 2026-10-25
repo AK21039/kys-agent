@@ -11,12 +11,14 @@ import { ProcessesTab } from './components/ProcessesTab';
 import { ReviewQueueTab } from './components/ReviewQueueTab';
 import { AuditRadarTab } from './components/AuditRadarTab';
 import { SandboxTab } from './components/SandboxTab';
+import { ImpactAnalysisTab } from './components/ImpactAnalysisTab';
 import { RefsTab } from './components/RefsTab';
 import { SettingsModal } from './components/SettingsModal';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabType>('ask');
   const [activeDocCode, setActiveDocCode] = useState<string | null>(null);
+  const [impactDocCode, setImpactDocCode] = useState<string | null>(null);
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [loadingStats, setLoadingStats] = useState<boolean>(false);
@@ -99,6 +101,12 @@ export const App: React.FC = () => {
     setCurrentTab('docs');
   };
 
+  const handleOpenImpact = (code: string) => {
+    setImpactDocCode(code);
+    setCurrentTab('impact');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
   return (
     <>
       <Header
@@ -156,6 +164,13 @@ export const App: React.FC = () => {
           <SandboxTab onOpenDoc={handleOpenDoc} />
         )}
 
+        {currentTab === 'impact' && (
+          <ImpactAnalysisTab
+            initialDocCode={impactDocCode}
+            onOpenDoc={handleOpenDoc}
+          />
+        )}
+
         {currentTab === 'refs' && (
           <RefsTab onOpenDoc={handleOpenDoc} />
         )}
@@ -165,6 +180,7 @@ export const App: React.FC = () => {
             code={activeDocCode}
             onOpenDoc={handleOpenDoc}
             onClose={handleCloseDoc}
+            onOpenImpact={handleOpenImpact}
           />
         )}
       </main>

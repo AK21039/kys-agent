@@ -76,9 +76,12 @@ Uygulama açıldığında sağ üstteki **"Ayarlar"** düğmesine tıklayarak ve
 8. **Uygunluk Kum Havuzu (Faz 3 - Ajan 3.1):**
    - Operasyonel veya satınalma kararlarının KYS prosedürlerine uygunluk simülasyonu.
    - UYGUN / ŞARTLI UYGUN / UYGUN DEĞİL kararı, zorunlu onay makamları, zorunlu formlar ve adımlar.
-9. **Eksik Atıflar:**
+9. **Revizyon Etki Analizi (Faz 4):**
+   - Bir doküman revize edildiğinde veya yürürlükten kalktığında zincirleme etkilenen dokümanlar, süreç adımları, onay kuralları ve RACI yetkilerinin tespiti.
+   - Risk düzeyi sınıflandırması (`YÜKSEK`, `ORTA`, `DÜŞÜK`) ve CSV etki raporu dışa aktarımı.
+10. **Eksik Atıflar:**
    - Atıfta bulunulmuş fakat bilgi tabanında henüz tam metni yer almayan doküman kodları.
-10. **Koyu / Açık Tema:**
+11. **Koyu / Açık Tema:**
    - Sistem tercihine duyarlı, tek tıkla değiştirilebilir koyu ve açık tema desteği.
    - Mobil ve masaüstü tam uyumluluk (yatay taşma/kaydırma engellenmiştir).
 

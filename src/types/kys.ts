@@ -280,4 +280,47 @@ export interface ComplianceCheckResponse {
   model?: string;
 }
 
+export interface AffectedDocumentItem {
+  code: string;
+  title: string;
+  clause_referenced?: string | null;
+  relation_type?: string | null;
+}
+
+export interface AffectedProcessItem {
+  process_code: string;
+  process_name: string;
+  step_seq: number;
+  step_name: string;
+}
+
+export interface AffectedRuleItem {
+  id: number;
+  rule_type: string;
+  subject: string;
+  action: string;
+  object: string;
+}
+
+export interface AffectedDecisionItem {
+  id: number;
+  topic: string;
+  decision_maker: string;
+  responsible?: string | null;
+}
+
+export interface ImpactAnalysisResponse {
+  document_code: string;
+  title: string;
+  revision: string;
+  risk_level: 'YUKSEK' | 'ORTA' | 'DUSUK';
+  summary: string;
+  affected_documents: AffectedDocumentItem[];
+  affected_processes: AffectedProcessItem[];
+  affected_rules: AffectedRuleItem[];
+  affected_decisions: AffectedDecisionItem[];
+  total_affected_count: number;
+}
+
+
 

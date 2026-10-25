@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   Sparkles,
+  GitPullRequest,
 } from 'lucide-react';
 
 export type TabType =
@@ -19,6 +20,7 @@ export type TabType =
   | 'review'
   | 'radar'
   | 'sandbox'
+  | 'impact'
   | 'refs'
   | 'doc';
 
@@ -132,6 +134,15 @@ export const Nav: React.FC<NavProps> = ({
       >
         <Sparkles size={16} />
         <span>Kum Havuzu</span>
+      </button>
+
+      <button
+        type="button"
+        className={currentTab === 'impact' ? 'active' : ''}
+        onClick={() => onSelectTab('impact')}
+      >
+        <GitPullRequest size={16} />
+        <span>Etki Analizi</span>
       </button>
 
       <button

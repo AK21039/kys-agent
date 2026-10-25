@@ -9,15 +9,17 @@ import {
   Link2,
   FileCheck,
   Image as ImageIcon,
+  GitPullRequest,
 } from 'lucide-react';
 
 interface DocDetailTabProps {
   code: string;
   onOpenDoc: (code: string) => void;
   onClose: () => void;
+  onOpenImpact?: (code: string) => void;
 }
 
-export const DocDetailTab: React.FC<DocDetailTabProps> = ({ code, onOpenDoc, onClose }) => {
+export const DocDetailTab: React.FC<DocDetailTabProps> = ({ code, onOpenDoc, onClose, onOpenImpact }) => {
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -107,17 +109,33 @@ export const DocDetailTab: React.FC<DocDetailTabProps> = ({ code, onOpenDoc, onC
 
               {detail.page_count && detail.page_count > 0 && (
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
-                    {detail.page_count} Sayfa
-                  </span>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={() => loadPageImage(1)}
-                  >
-                    <ImageIcon size={14} />
-                    <span>Sayfaları Önizle</span>
-                  </button>
+                  {detail.page_count && detail.page_count > 0 && (
+                    <>
+                      <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
+                        {detail.page_count} Sayfa
+                      </span>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        onClick={() => loadPageImage(1)}
+                      >
+                        <ImageIcon size={14} />
+                        <span>Sayfaları Önizle</span>
+                      </button>
+                    </>
+                  )}
+
+                  {onOpenImpact && (
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => onOpenImpact(detail.code)}
+                      title="Bu dokümanın revizyon etki analizini incele"
+                    >
+                      <GitPullRequest size={14} color="var(--accent)" />
+                      <span>Etki Analizi</span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
