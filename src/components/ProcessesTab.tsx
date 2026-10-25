@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import mermaid from 'mermaid';
 import { kysApi } from '../services/apiClient';
-import { ProcessSummary, ProcessDetail, ProcessStep } from '../types/kys';
+import {
+  ProcessSummary,
+  ProcessDetail,
+  ProcessStep,
+  DecisionItem,
+  ClauseMatchSuggestion,
+} from '../types/kys';
 import {
   GitBranch,
   RefreshCw,
@@ -14,6 +20,13 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
+  Table,
+  Upload,
+  Plus,
+  Trash2,
+  Sparkles,
+  Link2,
+  X,
 } from 'lucide-react';
 
 interface ProcessesTabProps {
@@ -21,6 +34,8 @@ interface ProcessesTabProps {
 }
 
 export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
+  const [activeTab, setActiveTab] = useState<'flow' | 'raci' | 'import'>('flow');
+
   const [processes, setProcesses] = useState<ProcessSummary[]>([]);
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [processDetail, setProcessDetail] = useState<ProcessDetail | null>(null);
@@ -41,6 +56,30 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
   const [mermaidSvg, setMermaidSvg] = useState<string>('');
   const mermaidContainerRef = useRef<HTMLDivElement>(null);
   const [diagramZoom, setDiagramZoom] = useState<number>(1);
+
+  // RACI Decisions state
+  const [decisions, setDecisions] = useState<DecisionItem[]>([]);
+  const [loadingDecisions, setLoadingDecisions] = useState<boolean>(false);
+  const [decisionsError, setDecisionsError] = useState<string | null>(null);
+
+  // New Decision Modal
+  const [showDecisionModal, setShowDecisionModal] = useState<boolean>(false);
+  const [decisionTopic, setDecisionTopic] = useState<string>('');
+  const [decisionMaker, setDecisionMaker] = useState<string>('');
+  const [decisionResponsible, setDecisionResponsible] = useState<string>('');
+  const [decisionConsulted, setDecisionConsulted] = useState<string>('');
+  const [decisionInformed, setDecisionInformed] = useState<string>('');
+  const [savingDecision, setSavingDecision] = useState<boolean>(false);
+
+  // Agent 2.1 Matcher state
+  const [matchingStepSeq, setMatchingStepSeq] = useState<number | null>(null);
+  const [matchSuggestions, setMatchSuggestions] = useState<ClauseMatchSuggestion[]>([]);
+  const [loadingMatches, setLoadingMatches] = useState<boolean>(false);
+  const [matchError, setMatchError] = useState<string | null>(null);
+
+  // Excel Upload State
+  const [uploadMessage, setUploadMessage] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [uploading, setUploading] = useState<boolean>(false);
 
   // Initialize Mermaid
   useEffect(() => {
@@ -87,7 +126,6 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
       const data = await kysApi.getProcess(code);
       setProcessDetail(data);
 
-      // Render Mermaid if provided
       if (data.mermaid && data.mermaid.trim()) {
         try {
           const uniqueId = `mermaid_${code.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}`;
@@ -99,7 +137,6 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
         }
       }
 
-      // If process has pages, default to page 1
       if (data.page_count && data.page_count > 0) {
         setCurrentPage(1);
         loadPageImage(code, 1);
@@ -111,11 +148,27 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
     }
   }, []);
 
+  const fetchDecisions = useCallback(async (code: string) => {
+    setLoadingDecisions(true);
+    setDecisionsError(null);
+    try {
+      const data = await kysApi.getDecisions(code);
+      setDecisions(data);
+    } catch (err: unknown) {
+      setDecisionsError(err instanceof Error ? err.message : 'Karar envanteri alınamadı');
+    } finally {
+      setLoadingDecisions(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (selectedCode) {
       fetchProcessDetail(selectedCode);
+      if (activeTab === 'raci') {
+        fetchDecisions(selectedCode);
+      }
     }
-  }, [selectedCode, fetchProcessDetail]);
+  }, [selectedCode, activeTab, fetchProcessDetail, fetchDecisions]);
 
   const loadPageImage = async (code: string, pageNum: number) => {
     setCurrentPage(pageNum);
@@ -138,14 +191,109 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
     }
   };
 
+  const handleSaveDecision = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedCode || !decisionTopic.trim() || !decisionMaker.trim()) return;
+
+    setSavingDecision(true);
+    try {
+      const created = await kysApi.createOrUpdateDecision({
+        process_code: selectedCode,
+        topic: decisionTopic.trim(),
+        decision_maker: decisionMaker.trim(),
+        responsible: decisionResponsible.trim() || null,
+        consulted: decisionConsulted.trim() ? decisionConsulted.split(',').map((s) => s.trim()) : null,
+        informed: decisionInformed.trim() ? decisionInformed.split(',').map((s) => s.trim()) : null,
+      });
+      setDecisions((prev) => [...prev, created]);
+      setShowDecisionModal(false);
+      setDecisionTopic('');
+      setDecisionMaker('');
+      setDecisionResponsible('');
+      setDecisionConsulted('');
+      setDecisionInformed('');
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Karar kaydedilemedi');
+    } finally {
+      setSavingDecision(false);
+    }
+  };
+
+  const handleDeleteDecision = async (id: number) => {
+    if (!window.confirm('Bu kararı silmek istediğinizden emin misiniz?')) return;
+    try {
+      await kysApi.deleteDecision(id);
+      setDecisions((prev) => prev.filter((d) => d.id !== id));
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Karar silinemedi');
+    }
+  };
+
+  const handleGetClauseMatches = async (stepSeq: number) => {
+    if (!selectedCode) return;
+    setMatchingStepSeq(stepSeq);
+    setLoadingMatches(true);
+    setMatchError(null);
+    setMatchSuggestions([]);
+    try {
+      const res = await kysApi.suggestClauseMatches(selectedCode, stepSeq);
+      setMatchSuggestions(res);
+    } catch (err: unknown) {
+      setMatchError(err instanceof Error ? err.message : 'Madde eşleşme önerileri alınamadı');
+    } finally {
+      setLoadingMatches(false);
+    }
+  };
+
+  const handleLinkClause = async (stepSeq: number, docCode: string, clauseNo: string) => {
+    if (!selectedCode) return;
+    try {
+      await kysApi.linkStepClause(selectedCode, stepSeq, docCode, clauseNo);
+      alert(`Adım ${stepSeq}, ${docCode} Md. ${clauseNo} maddesine bağlandı.`);
+      fetchProcessDetail(selectedCode);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : 'Madde bağlanamadı');
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'process' | 'decision') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    setUploadMessage(null);
+    try {
+      const res =
+        type === 'process'
+          ? await kysApi.importProcessExcel(file)
+          : await kysApi.importDecisionsExcel(file);
+      setUploadMessage({
+        type: 'ok',
+        text: `İçe aktarma başarılı! Toplam ${res.imported_count} kayıt eklendi/güncellendi.`,
+      });
+      fetchProcesses();
+      if (selectedCode) fetchDecisions(selectedCode);
+    } catch (err: unknown) {
+      setUploadMessage({
+        type: 'err',
+        text: err instanceof Error ? err.message : 'Yükleme başarısız',
+      });
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  };
+
   return (
     <div>
       {/* Top Selector Card */}
       <div className="card">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <GitBranch size={18} color="var(--accent)" />
-            <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>KYS Süreç Envanteri ve Akış Şemaları</h2>
+            <GitBranch size={20} color="var(--accent)" />
+            <h2 style={{ margin: 0, fontSize: '17px', fontWeight: 700 }}>
+              KYS Süreç & Karar Stüdyosu (Faz 2)
+            </h2>
           </div>
           <button type="button" className="icon-btn" onClick={fetchProcesses} disabled={loadingList}>
             <RefreshCw size={14} style={{ animation: loadingList ? 'spin 1s linear infinite' : 'none' }} />
@@ -153,13 +301,17 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
           </button>
         </div>
 
+        <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: '0 0 14px 0' }}>
+          Süreç adımları, karar envanteri (RACI matrisi), Excel içe aktarımı ve Ajan 2.1 ile doküman maddelerine otomatik bağlama stüdyosu.
+        </p>
+
         {listError && (
           <div style={{ color: 'var(--danger)', fontSize: '13px', marginBottom: 10 }}>
             {listError}
           </div>
         )}
 
-        {/* Process Pills / Selector */}
+        {/* Process Selector Pills */}
         {loadingList ? (
           <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Süreçler taranıyor...</div>
         ) : (
@@ -198,6 +350,39 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
             })}
           </div>
         )}
+
+        {/* Sub-tab Navigation */}
+        <div style={{ display: 'flex', gap: 8, borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 12 }}>
+          <button
+            type="button"
+            className={activeTab === 'flow' ? 'primary' : 'secondary'}
+            onClick={() => setActiveTab('flow')}
+            style={{ fontSize: '13px', padding: '6px 14px' }}
+          >
+            <GitBranch size={14} />
+            <span>Akış Şeması & Önizleme</span>
+          </button>
+
+          <button
+            type="button"
+            className={activeTab === 'raci' ? 'primary' : 'secondary'}
+            onClick={() => setActiveTab('raci')}
+            style={{ fontSize: '13px', padding: '6px 14px' }}
+          >
+            <Table size={14} />
+            <span>Karar Envanteri (RACI)</span>
+          </button>
+
+          <button
+            type="button"
+            className={activeTab === 'import' ? 'primary' : 'secondary'}
+            onClick={() => setActiveTab('import')}
+            style={{ fontSize: '13px', padding: '6px 14px' }}
+          >
+            <Upload size={14} />
+            <span>Excel İçe Aktar & Eşleştir</span>
+          </button>
+        </div>
       </div>
 
       {detailError && (
@@ -216,9 +401,9 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
         </div>
       )}
 
-      {processDetail && !loadingDetail && (
+      {/* TAB 1: FLOW DIAGRAM & PREVIEW */}
+      {activeTab === 'flow' && processDetail && !loadingDetail && (
         <>
-          {/* Header Info */}
           <div className="card">
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
               <div>
@@ -248,9 +433,7 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
             </div>
           </div>
 
-          {/* Main 2-column layout: Left: Mermaid Diagram / Steps; Right: Page Image / Quote */}
           <div className="process-layout">
-            {/* Left Column: Mermaid Diagram & Steps List */}
             <div className="diagram-panel">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                 <h4 style={{ margin: 0, fontSize: '14.5px', fontWeight: 600 }}>
@@ -306,10 +489,9 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
                 </div>
               )}
 
-              {/* Steps Table/List */}
               <div style={{ marginTop: 16 }}>
                 <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', fontWeight: 600 }}>
-                  Süreç Adımları (Adıma tıklayınca kanıt alıntısı ve sayfa açılır)
+                  Süreç Adımları (Tıklayınca kanıt alıntısı ve sayfa açılır)
                 </h4>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 380, overflowY: 'auto' }}>
@@ -380,9 +562,7 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
               </div>
             </div>
 
-            {/* Right Column: Selected Step Detail & PDF Page Preview */}
             <div className="preview-panel">
-              {/* Selected Step Info */}
               <div style={{ marginBottom: 16 }}>
                 <h4 style={{ margin: '0 0 10px 0', fontSize: '14.5px', fontWeight: 600 }}>
                   {selectedStep ? `Adım ${selectedStep.seq}: ${selectedStep.name}` : 'Adım Detayı'}
@@ -431,7 +611,6 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
                 )}
               </div>
 
-              {/* PDF Sayfa Görüntüsü */}
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -484,16 +663,381 @@ export const ProcessesTab: React.FC<ProcessesTabProps> = ({ onOpenDoc }) => {
                     />
                   </div>
                 )}
-
-                {!pageImageUrl && !pageImageLoading && !pageImageError && (
-                  <div style={{ padding: '30px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-                    Sayfa önizlemesi bulunamadı.
-                  </div>
-                )}
               </div>
             </div>
           </div>
         </>
+      )}
+
+      {/* TAB 2: RACI DECISION MATRIX */}
+      {activeTab === 'raci' && (
+        <div className="card">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700 }}>
+                Karar Envanteri & RACI Yetki Matrisi ({selectedCode || 'Tümü'})
+              </h3>
+              <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: 'var(--text-muted)' }}>
+                <strong>A (Accountable):</strong> Karar Sahibi / Onaylayan · <strong>R (Responsible):</strong> Yürüten / Hazırlayan · <strong>C (Consulted):</strong> Danışılan · <strong>I (Informed):</strong> Bilgilendirilen
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="primary"
+              onClick={() => setShowDecisionModal(true)}
+              style={{ fontSize: '13px', padding: '6px 12px' }}
+            >
+              <Plus size={14} />
+              <span>Yeni Karar Ekle</span>
+            </button>
+          </div>
+
+          {decisionsError && (
+            <div style={{ color: 'var(--danger)', fontSize: '13px', marginBottom: 10 }}>
+              {decisionsError}
+            </div>
+          )}
+
+          {loadingDecisions ? (
+            <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-muted)' }}>
+              Karar envanteri yükleniyor...
+            </div>
+          ) : decisions.length === 0 ? (
+            <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-muted)' }}>
+              Bu süreç için henüz kayıtlı bir karar envanteri bulunmuyor. Yeni karar ekleyebilir veya Excel'den içe aktarabilirsiniz.
+            </div>
+          ) : (
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Karar Konusu</th>
+                    <th>Karar Sahibi (A)</th>
+                    <th>Yürüten (R)</th>
+                    <th>Danışılan (C)</th>
+                    <th>Bilgilendirilen (I)</th>
+                    <th>Dayanak Kural / Madde</th>
+                    <th>İşlem</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {decisions.map((d) => (
+                    <tr key={d.id}>
+                      <td style={{ fontWeight: 600 }}>{d.topic}</td>
+                      <td>
+                        <span className="badge badge-info" style={{ fontWeight: 700 }}>
+                          {d.decision_maker}
+                        </span>
+                      </td>
+                      <td>{d.responsible || '-'}</td>
+                      <td>
+                        {Array.isArray(d.consulted)
+                          ? d.consulted.join(', ')
+                          : d.consulted || '-'}
+                      </td>
+                      <td>
+                        {Array.isArray(d.informed)
+                          ? d.informed.join(', ')
+                          : d.informed || '-'}
+                      </td>
+                      <td style={{ fontSize: '12px' }}>
+                        {d.source_document ? (
+                          <span
+                            className="ref-link"
+                            onClick={() => onOpenDoc(d.source_document!)}
+                          >
+                            {d.source_document} {d.source_clause ? `Md. ${d.source_clause}` : ''}
+                          </span>
+                        ) : d.rule_summary ? (
+                          <span>{d.rule_summary}</span>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)' }}>-</span>
+                        )}
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={() => handleDeleteDecision(d.id)}
+                          style={{ color: 'var(--danger)', padding: '2px 6px' }}
+                          title="Kararı Sil"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 3: EXCEL IMPORT & CLAUSE MATCHER */}
+      {activeTab === 'import' && (
+        <div>
+          {uploadMessage && (
+            <div
+              className="card"
+              style={{
+                backgroundColor: uploadMessage.type === 'ok' ? 'var(--ok-soft)' : 'var(--danger-soft)',
+                border: `1px solid ${uploadMessage.type === 'ok' ? 'var(--ok-border)' : 'var(--danger-border)'}`,
+                color: uploadMessage.type === 'ok' ? 'var(--ok)' : 'var(--danger)',
+                padding: '12px 14px',
+                marginBottom: 14,
+              }}
+            >
+              {uploadMessage.text}
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 16 }}>
+            {/* Süreç Adımları İçe Aktarma */}
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <Upload size={18} color="var(--accent)" />
+                <h4 style={{ margin: 0, fontSize: '15px' }}>Süreç Adımları Excel İçe Aktar</h4>
+              </div>
+              <p style={{ color: 'var(--text-muted)', fontSize: '12.5px', margin: '0 0 12px 0' }}>
+                Excel şablonu: Sütunlar: <code>seq</code>, <code>name</code>, <code>responsible</code>, <code>decision</code>, <code>next_steps</code>.
+              </p>
+
+              <label className="secondary" style={{ display: 'inline-flex', cursor: 'pointer' }}>
+                <span>{uploading ? 'Yükleniyor...' : 'Excel Dosyası Seç (.xlsx)'}</span>
+                <input
+                  type="file"
+                  accept=".xlsx, .xls"
+                  onChange={(e) => handleFileUpload(e, 'process')}
+                  disabled={uploading}
+                  style={{ display: 'none' }}
+                />
+              </label>
+            </div>
+
+            {/* Karar Envanteri İçe Aktarma */}
+            <div className="card">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <Table size={18} color="var(--accent)" />
+                <h4 style={{ margin: 0, fontSize: '15px' }}>Karar Envanteri (RACI) Excel İçe Aktar</h4>
+              </div>
+              <p style={{ color: 'var(--text-muted)', fontSize: '12.5px', margin: '0 0 12px 0' }}>
+                Excel şablonu: Sütunlar: <code>process_code</code>, <code>topic</code>, <code>decision_maker</code>, <code>responsible</code>, <code>consulted</code>, <code>informed</code>.
+              </p>
+
+              <label className="secondary" style={{ display: 'inline-flex', cursor: 'pointer' }}>
+                <span>{uploading ? 'Yükleniyor...' : 'Excel Dosyası Seç (.xlsx)'}</span>
+                <input
+                  type="file"
+                  accept=".xlsx, .xls"
+                  onChange={(e) => handleFileUpload(e, 'decision')}
+                  disabled={uploading}
+                  style={{ display: 'none' }}
+                />
+              </label>
+            </div>
+          </div>
+
+          {/* Ajan 2.1 Süreç Eşleştirici */}
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <Sparkles size={18} color="var(--accent)" />
+              <h3 style={{ margin: 0, fontSize: '16px' }}>
+                Ajan 2.1: Süreç Adımını Doküman Maddesiyle Eşleştirme Önerisi
+              </h3>
+            </div>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: '0 0 14px 0' }}>
+              Seçili sürecin adımlarına tıklayarak FTS ve semantik arama ile en uygun KYS doküman maddesini tespit edin ve tek tıkla bağlayın.
+            </p>
+
+            {processDetail && (
+              <div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+                  {processDetail.steps?.map((step) => (
+                    <button
+                      key={step.seq}
+                      type="button"
+                      className={`icon-btn ${matchingStepSeq === step.seq ? 'active' : ''}`}
+                      onClick={() => handleGetClauseMatches(step.seq)}
+                      disabled={loadingMatches}
+                    >
+                      <span>{step.seq}. {step.name}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {loadingMatches && (
+                  <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+                    Ajan 2.1 doküman maddelerini inceliyor...
+                  </div>
+                )}
+
+                {matchError && (
+                  <div style={{ color: 'var(--danger)', fontSize: '13px', marginBottom: 10 }}>
+                    {matchError}
+                  </div>
+                )}
+
+                {matchSuggestions.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 600 }}>
+                      Önerilen Doküman Maddeleri:
+                    </h4>
+
+                    {matchSuggestions.map((m, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          border: '1px solid var(--line)',
+                          borderRadius: 'var(--radius)',
+                          padding: '10px 12px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span
+                              className="ref-link"
+                              onClick={() => onOpenDoc(m.document_code)}
+                            >
+                              {m.document_code}
+                            </span>
+                            <span className="badge badge-info">Md. {m.clause_no}</span>
+                            <span className="badge badge-ok">
+                              Skor: %{(m.similarity_score * 100).toFixed(0)}
+                            </span>
+                            {m.heading && (
+                              <span style={{ fontWeight: 600, fontSize: '13px' }}>{m.heading}</span>
+                            )}
+                          </div>
+                          {m.quote && (
+                            <div className="quote-box" style={{ margin: '6px 0 0', fontSize: '12.5px' }}>
+                              "{m.quote}"
+                            </div>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={() => matchingStepSeq && handleLinkClause(matchingStepSeq, m.document_code, m.clause_no)}
+                          style={{ padding: '6px 12px', fontSize: '12.5px' }}
+                        >
+                          <Link2 size={13} />
+                          <span>Bu Maddeye Bağla</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* New Decision Modal */}
+      {showDecisionModal && (
+        <div className="modal-backdrop" onClick={() => setShowDecisionModal(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Plus size={18} color="var(--accent)" />
+                <h3 className="modal-title">Yeni Karar / Yetki Tanımı</h3>
+              </div>
+              <button className="icon-btn" onClick={() => setShowDecisionModal(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveDecision} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: 4 }}>
+                  Karar Konusu / Karar Adı
+                </label>
+                <input
+                  type="text"
+                  placeholder="Örn: 100.000 TL üzeri satınalma onayı"
+                  value={decisionTopic}
+                  onChange={(e) => setDecisionTopic(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: 4 }}>
+                  Karar Sahibi (Accountable - Onaylayan Rol)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Örn: Genel Müdür"
+                  value={decisionMaker}
+                  onChange={(e) => setDecisionMaker(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: 4 }}>
+                  Yürüten / Sorumlu (Responsible)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Örn: Satınalma Sorumlusu"
+                  value={decisionResponsible}
+                  onChange={(e) => setDecisionResponsible(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: 4 }}>
+                  Danışılan Roller (Consulted - virgülle ayırın)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Örn: Mali İşler Müdürü, Kalite Müdürü"
+                  value={decisionConsulted}
+                  onChange={(e) => setDecisionConsulted(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12.5px', fontWeight: 600, marginBottom: 4 }}>
+                  Bilgilendirilen Roller (Informed - virgülle ayırın)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Örn: İlgili Departman Müdürü"
+                  value={decisionInformed}
+                  onChange={(e) => setDecisionInformed(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setShowDecisionModal(false)}
+                  style={{ flex: 1 }}
+                >
+                  Vazgeç
+                </button>
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={savingDecision}
+                  style={{ flex: 1 }}
+                >
+                  {savingDecision ? 'Kaydediliyor...' : 'Kaydet'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -185,3 +185,35 @@ export interface EntityResolutionItem {
   status: RuleStatus;
   sources?: { document: string; clause?: string | null }[];
 }
+
+export interface DecisionItem {
+  id: number;
+  topic: string;
+  process_code: string;
+  decision_maker: string;
+  responsible?: string | null;
+  consulted?: string[] | string | null;
+  informed?: string[] | string | null;
+  rule_id?: number | null;
+  rule_summary?: string | null;
+  source_document?: string | null;
+  source_clause?: string | null;
+  created_at?: string;
+}
+
+export interface ClauseMatchSuggestion {
+  document_code: string;
+  clause_no: string;
+  heading?: string | null;
+  quote?: string | null;
+  similarity_score: number;
+  explanation?: string | null;
+}
+
+export interface ImportSummaryResponse {
+  ok: boolean;
+  imported_count: number;
+  warnings?: string[];
+  message?: string;
+}
+

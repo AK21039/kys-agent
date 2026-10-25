@@ -59,10 +59,11 @@ Uygulama açıldığında sağ üstteki **"Ayarlar"** düğmesine tıklayarak ve
 4. **Doküman Ayrıntısı:**
    - Bölümler, maddeler, yapılan atıflar ve bu dokümana atıf yapan dokümanlar.
    - Sayfa önizleme desteği (`/api/documents/{code}/pages/{n}.png`).
-5. **Süreçler (Akış Şeması ve Kanıt Görüntüsü):**
-   - `mermaid` kütüphanesiyle dinamik akış diyagramı çizimi.
-   - Yan yana çift kolonlu görünüm: Mermaid şeması ve PDF sayfa görüntüsü.
-   - Süreç adımlarına tıklandığında adıma ait kanıt alıntısı ve sayfa numarası anında açılır.
+5. **Süreç & Karar Stüdyosu (Faz 2):**
+   - Mermaid kütüphanesiyle dinamik akış diyagramı ve yan yana PDF sayfa görüntüsü.
+   - Karar Envanteri & RACI Yetki Matrisi: Karar konusu, rol atamaları (A, R, C, I) ve dayanak onay kuralları.
+   - Excel İçe Aktarma: Süreç adımları ve karar matrislerinin Excel üzerinden sisteme yüklenmesi.
+   - Ajan 2.1 Eşleştirici: Süreç adımlarının KYS doküman maddeleriyle otomatik eşleştirilmesi ve tek tıkla bağlanması.
 6. **Onay Kuyruğu (Faz 1 - İnsan Onayı):**
    - LLM tarafından çıkarılan kural ve varlık önerilerinin incelenmesi (`ONERILDI → ONAYLANDI / DUZELTILDI / REDDEDILDI`).
    - Çıkarılan kural yapısı ile kaynak dokümanın birebir alıntısının yan yana denetlenmesi.

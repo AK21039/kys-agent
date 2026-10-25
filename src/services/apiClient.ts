@@ -10,6 +10,9 @@ import {
   AskResponse,
   RuleItem,
   EntityResolutionItem,
+  DecisionItem,
+  ClauseMatchSuggestion,
+  ImportSummaryResponse,
 } from '../types/kys';
 
 const STORAGE_KEY_API_BASE = 'kys_api_base';
@@ -416,6 +419,130 @@ export const kysApi = {
     });
     if (!res.ok) {
       throw new Error(`Varlık eşleme güncellenemedi (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async getDecisions(processCode?: string): Promise<DecisionItem[]> {
+    const q = processCode ? `?process_code=${encodeURIComponent(processCode)}` : '';
+    const res = await fetchWithAuth(`/api/decisions${q}`);
+    if (!res.ok) {
+      throw new Error(`Karar envanteri alınamadı (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async createOrUpdateDecision(decision: Partial<DecisionItem>): Promise<DecisionItem> {
+    const res = await fetchWithAuth('/api/decisions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(decision),
+    });
+    if (!res.ok) {
+      throw new Error(`Karar kaydedilemedi (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async deleteDecision(id: number): Promise<{ ok: boolean }> {
+    const res = await fetchWithAuth(`/api/decisions/${id}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      throw new Error(`Karar silinemedi (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async suggestClauseMatches(processCode: string, stepSeq: number): Promise<ClauseMatchSuggestion[]> {
+    const res = await fetchWithAuth(
+      `/api/processes/${encodeURIComponent(processCode)}/steps/${stepSeq}/match-clauses`,
+      { method: 'POST' }
+    );
+    if (!res.ok) {
+      throw new Error(`Madde eşleşme önerileri alınamadı (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async linkStepClause(
+    processCode: string,
+    stepSeq: number,
+    docCode: string,
+    clauseNo: string
+  ): Promise<{ ok: boolean }> {
+    const res = await fetchWithAuth(
+      `/api/processes/${encodeURIComponent(processCode)}/steps/${stepSeq}/link-clause`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_code: docCode, clause_no: clauseNo }),
+      }
+    );
+    if (!res.ok) {
+      throw new Error(`Adım doküman maddesine bağlanamadı (${res.status})`);
+    }
+    return res.json();
+  },
+
+  async importProcessExcel(file: File): Promise<ImportSummaryResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const { apiBase } = getApiConfig();
+    const cleanBase = apiBase ? apiBase.replace(/\/+$/, '') : '';
+    const url = `${cleanBase}/api/processes/import`;
+
+    const { token } = getApiConfig();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (!res.ok) {
+      let errMsg = `Süreç Excel içe aktarma başarısız (${res.status})`;
+      try {
+        const j = await res.json();
+        if (j.detail) errMsg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+      } catch {
+        // ignore
+      }
+      throw new Error(errMsg);
+    }
+    return res.json();
+  },
+
+  async importDecisionsExcel(file: File): Promise<ImportSummaryResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const { apiBase } = getApiConfig();
+    const cleanBase = apiBase ? apiBase.replace(/\/+$/, '') : '';
+    const url = `${cleanBase}/api/decisions/import`;
+
+    const { token } = getApiConfig();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+
+    if (!res.ok) {
+      let errMsg = `Karar Excel içe aktarma başarısız (${res.status})`;
+      try {
+        const j = await res.json();
+        if (j.detail) errMsg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+      } catch {
+        // ignore
+      }
+      throw new Error(errMsg);
     }
     return res.json();
   },

@@ -51,7 +51,7 @@ export const Nav: React.FC<NavProps> = ({
         onClick={() => onSelectTab('processes')}
       >
         <GitBranch size={16} />
-        <span>Süreçler</span>
+        <span>Süreç & Karar Stüdyosu</span>
       </button>
 
       <button
