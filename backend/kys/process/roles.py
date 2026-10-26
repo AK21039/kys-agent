@@ -121,6 +121,17 @@ class RoleMatch:
                 "oneriler": self.suggestions, "birim": self.is_unit}
 
 
+# Title words that indicate a manager/leader role (not a generic unit name)
+_TITLE_WORDS = {"mudur", "yonetici", "direktor", "direktoru", "sef", "seflik", "amir", "baskan", "baskani",
+                "koordinator", "koordinatör", "sorunlu", "sorumlu", "lider", "ekip lideri", "grup baskanı"}
+
+
+def _has_title(name: str) -> bool:
+    """Check if a role name contains a title word indicating a manager position."""
+    f = fold(name)
+    return any(t in f for t in _TITLE_WORDS)
+
+
 class RoleIndex:
     """`entities` (ROL, BIRIM) ve `entity_aliases` bellek içi dizini; bir kez yüklenir."""
 
@@ -129,16 +140,48 @@ class RoleIndex:
         marks = ",".join("?" * len(types))
         self.entities: dict[int, tuple[str, str]] = {}   # id → (kanonik ad, tip)
         self.names: list[tuple[str, int, bool]] = []     # (ad, entity_id, takma_ad_mi)
-        for e in conn.execute(f"SELECT id, canonical_name, entity_type FROM entities WHERE entity_type IN ({marks})", types):
-            self.entities[e["id"]] = (e["canonical_name"], e["entity_type"])
-            self.names.append((e["canonical_name"], e["id"], False))
+        # Load entities: ROL first, then BIRIM
+        for entity_type in types:
+            for e in conn.execute(
+                f"SELECT id, canonical_name, entity_type FROM entities WHERE entity_type = ?",
+                (entity_type,)
+            ):
+                self.entities[e["id"]] = (e["canonical_name"], e["entity_type"])
+                self.names.append((e["canonical_name"], e["id"], False))
+        # Load aliases
         for a in conn.execute(
-                f"""SELECT a.alias, a.entity_id FROM entity_aliases a JOIN entities e ON e.id = a.entity_id
+                f"""SELECT a.alias, a.entity_id, e.entity_type 
+                    FROM entity_aliases a JOIN entities e ON e.id = a.entity_id
                     WHERE e.entity_type IN ({marks})""", types):
             self.names.append((a["alias"], a["entity_id"], True))
+        # Build _exact with preference:
+        # 1. ROL over BIRIM
+        # 2. Aliases pointing to titled roles (Müdür, Direktör, etc.) over generic canonical names
         self._exact: dict[str, tuple[int, bool]] = {}
         for name, eid, is_alias in self.names:
-            self._exact.setdefault(fold(name), (eid, is_alias))
+            f = fold(name)
+            entity_type = self.entities[eid][1]
+            entity_name = self.entities[eid][0]
+            entity_has_title = _has_title(entity_name)
+            
+            if f in self._exact:
+                existing_eid, _ = self._exact[f]
+                existing_type = self.entities[existing_eid][1]
+                existing_name = self.entities[existing_eid][0]
+                existing_has_title = _has_title(existing_name)
+                
+                # Prefer ROL over BIRIM
+                if existing_type == EntityType.BIRIM.value and entity_type == EntityType.ROL.value:
+                    self._exact[f] = (eid, is_alias)
+                # Prefer titled roles over non-titled (for same entity type)
+                elif existing_type == entity_type and not existing_has_title and entity_has_title:
+                    self._exact[f] = (eid, is_alias)
+                # Prefer aliases over canonical names for titled roles
+                elif existing_type == entity_type and entity_has_title and is_alias and not existing_has_title:
+                    self._exact[f] = (eid, is_alias)
+                # else keep existing (first wins)
+            else:
+                self._exact[f] = (eid, is_alias)
 
     def resolve(self, name: str) -> RoleMatch:
         name = " ".join((name or "").split())
