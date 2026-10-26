@@ -7,13 +7,14 @@ FROM node:20-alpine AS web-builder
 
 WORKDIR /app
 
-# Copy all source files first (avoids glob/cache issues with package*.json)
-COPY . .
+# Copy package.json first (explicit, avoids cache/glob issues)
+COPY package.json ./
 
 # Install dependencies (uses package.json; package-lock.json optional)
 RUN npm install
 
-# Build React app
+# Copy remaining source files and build
+COPY . .
 RUN npm run build
 
 # Stage 2: Python backend with embedded web assets
