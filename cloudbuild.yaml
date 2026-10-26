@@ -1,20 +1,20 @@
 steps:
-  # 1. Adım: Dockerfile'ınızı kullanarak imajı build eder
+  # 1. Adım: Dockerfile'ınızı kullanarak imajı build eder (AI branch - multi-stage nginx+uvicorn+supervisor)
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/kys-agent:$COMMIT_SHA', '.']
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/kys-agent-ai:$COMMIT_SHA', '.']
 
   # 2. Adım: Build edilen imajı Google Container Registry'ye yükler
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/kys-agent:$COMMIT_SHA']
+    args: ['push', 'gcr.io/$PROJECT_ID/kys-agent-ai:$COMMIT_SHA']
 
-  # 3. Adım: Cloud Run servisini deploy eder (veya günceller)
+  # 3. Adım: Cloud Run servisini deploy eder (veya günceller) - kys-agent-ai
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
     entrypoint: 'gcloud'
     args:
       - 'run'
       - 'deploy'
-      - 'kys-agent'
-      - '--image=gcr.io/$PROJECT_ID/kys-agent:$COMMIT_SHA'
+      - 'kys-agent-ai'
+      - '--image=gcr.io/$PROJECT_ID/kys-agent-ai:$COMMIT_SHA'
       - '--region=europe-west1'
       - '--platform=managed'
       - '--allow-unauthenticated'
