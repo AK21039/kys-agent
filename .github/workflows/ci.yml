@@ -39,9 +39,23 @@ jobs:
           tags: |
             ghcr.io/ak21039/kys-agent:latest
             ghcr.io/ak21039/kys-agent:${{ github.sha }}
-      - name: Duman testi (veritabanısız açılış + sağlık kontrolü)
+      - name: Duman testi (nginx + uvicorn birleşik konteyner)
         run: |
-          docker run -d --name kys -p 8080:8080 ghcr.io/ak21039/kys-agent:${{ github.sha }}
-          for i in $(seq 1 20); do curl -fs http://localhost:8080/qa/api/health && break; sleep 1; done
+          docker run -d --name kys -p 8080:8080 \
+            -e KYS_BASE_PATH=/qa \
+            -e KYS_ACCESS_TOKEN=test-token \
+            -e KYS_DB_URL= \
+            ghcr.io/ak21039/kys-agent:${{ github.sha }}
+          # Nginx ve uvicorn başlatılana kadar bekle (supervisor ile ~10-15 sn)
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:8080/qa/api/health >/dev/null 2>&1; then
+              echo "Health endpoint hazır"
+              break
+            fi
+            sleep 2
+          done
+          # Frontend testi
           curl -fs http://localhost:8080/qa/ | grep -q "KYS Sorgu"
+          # API testi (token ile)
+          curl -fs -H "Authorization: Bearer test-token" http://localhost:8080/qa/api/health | grep -q "healthy"
           docker logs kys
