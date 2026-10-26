@@ -6,5 +6,16 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 3000,
+    proxy: {
+      '/qa/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+      '/qa/mcp': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        ws: true,
+      },
+    },
   },
 });
