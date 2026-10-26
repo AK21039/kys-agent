@@ -1,0 +1,32 @@
+# KYS sorgu servisi: web sayfas─▒ + REST API + MCP. Salt okunur; veritaban─▒ /data alt─▒na ba─şlan─▒r
+# veya KYS_DB_URL ile a├ğ─▒l─▒┼şta indirilir. Herhangi bir konteyner platformunda ├ğal─▒┼ş─▒r (Cloud Run, Koyeb,
+# Render, Hugging Face Spaces, VPS...). Ayr─▒nt─▒lar: docs/DEPLOY.md
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+WORKDIR /app
+
+COPY backend/pyproject.toml backend/
+COPY backend/kys backend/kys
+RUN pip install "./backend[server]"
+
+# Web uygulamas─▒ (infra/build_web.py ÔåÆ web-dist.zip) varsa /app/web i├ğine a├ğ─▒l─▒r; yoksa build k─▒r─▒lmaz.
+# `web-dis[t].zip` deseni dosya yoksa da pyproject ile e┼şle┼şti─şi i├ğin COPY hata vermez.
+COPY backend/pyproject.toml web-dis[t].zip /tmp/webin/
+RUN mkdir -p /app/web \
+    && if [ -f /tmp/webin/web-dist.zip ]; then \
+         python -c "import zipfile; zipfile.ZipFile('/tmp/webin/web-dist.zip').extractall('/app/web')"; fi \
+    && rm -rf /tmp/webin
+
+RUN useradd --create-home kys && mkdir -p /data && chown kys /data
+USER kys
+
+ENV KYS_DB_PATH=/data/kys.db \
+    KYS_OVERRIDES_PATH=/data/kys_overrides.json \
+    KYS_BASE_PATH=/qa \
+    KYS_WEB_DIR=/app/web \
+    PORT=8080
+EXPOSE 8080
+VOLUME /data
+
+CMD ["sh", "-c", "exec uvicorn kys.api.app:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
