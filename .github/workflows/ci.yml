@@ -53,7 +53,7 @@ jobs:
             sleep 2
           done
           curl -fs http://localhost:8080/qa/ | grep -q "KYS Sorgu"
-          curl -fs -H "Authorization: Bearer test-token" http://localhost:8080/qa/api/health | grep -q "healthy"
+          curl -fs -H "Authorization: Bearer test-token" http://localhost:8080/qa/api/health | grep -q '"ok":true'
           docker logs kys-main
 
   image-ai:
@@ -92,5 +92,5 @@ jobs:
             sleep 2
           done
           curl -fs http://localhost:8080/qa/ | grep -q "KYS Sorgu"
-          curl -fs -H "Authorization: Bearer test-token" http://localhost:8080/qa/api/health | grep -q "healthy"
+          curl -fs -H "Authorization: Bearer test-token" http://localhost:8080/qa/api/health | grep -q '"ok":true'
           docker logs kys-ai
