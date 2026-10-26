@@ -13,10 +13,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev,server]"
-        working-directory: backend
-      - run: pytest -q
-        working-directory: backend
+      - run: cd backend && pip install -e ".[dev,server]"
+      - run: cd backend && pytest -q
 
   image-main:
     needs: test
