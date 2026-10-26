@@ -1,35 +1,22 @@
 # KYS sorgu servisi: web sayfası + REST API + MCP. Salt okunur; veritabanı /data altına bağlanır
 # veya KYS_DB_URL ile açılışta indirilir. Herhangi bir konteyner platformunda çalışır (Cloud Run, Koyeb,
 # Render, Hugging Face Spaces, VPS...). Ayrıntılar: docs/DEPLOY.md
-
-# Stage 1: Build React SPA
-FROM node:20-alpine AS web-builder
-
-WORKDIR /app
-
-# Copy package.json first (explicit, avoids cache/glob issues)
-COPY package.json ./
-
-# Install dependencies (uses package.json; package-lock.json optional)
-RUN npm install
-
-# Copy remaining source files and build
-COPY . .
-RUN npm run build
-
-# Stage 2: Python backend with embedded web assets
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /app
 
-# Copy Python backend
 COPY backend/pyproject.toml backend/
 COPY backend/kys backend/kys
 RUN pip install "./backend[server]"
 
-# Copy built React assets from web-builder stage
-COPY --from=web-builder /app/dist /app/web
+# Web uygulaması (infra/build_web.py → web-dist.zip) varsa /app/web içine açılır; yoksa build kırılmaz.
+# `web-dis[t].zip` deseni dosya yoksa da pyproject ile eşleştiği için COPY hata vermez.
+COPY backend/pyproject.toml web-dis[t].zip /tmp/webin/
+RUN mkdir -p /app/web \
+    && if [ -f /tmp/webin/web-dist.zip ]; then \
+         python -c "import zipfile; zipfile.ZipFile('/tmp/webin/web-dist.zip').extractall('/app/web')"; fi \
+    && rm -rf /tmp/webin
 
 RUN useradd --create-home kys && mkdir -p /data && chown kys /data
 USER kys

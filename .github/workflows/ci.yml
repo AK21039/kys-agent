@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, ai]
   pull_request:
 
 jobs:
@@ -17,10 +17,9 @@ jobs:
       - run: pytest -q
         working-directory: backend
 
-  image:
-    # Konteyner imajı: ghcr.io/ak21039/kys-agent (depo gizli olduğu için imaj da gizlidir)
+  image-main:
     needs: test
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,11 +36,61 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/ak21039/kys-agent:latest
-            ghcr.io/ak21039/kys-agent:${{ github.sha }}
-      - name: Duman testi (veritabanısız açılış + sağlık kontrolü)
+            ghcr.io/ak21039/kys-agent-main:latest
+            ghcr.io/ak21039/kys-agent-main:${{ github.sha }}
+      - name: Duman testi (main - uvicorn only)
         run: |
-          docker run -d --name kys -p 8080:8080 ghcr.io/ak21039/kys-agent:${{ github.sha }}
-          for i in $(seq 1 20); do curl -fs http://localhost:8080/qa/api/health && break; sleep 1; done
+          docker run -d --name kys-main -p 8080:8080 \
+            -e KYS_BASE_PATH=/qa \
+            -e KYS_ACCESS_TOKEN=test-token \
+            -e KYS_DB_URL= \
+            ghcr.io/ak21039/kys-agent-main:${{ github.sha }}
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:8080/qa/api/health >/dev/null 2>&1; then
+              echo "Health endpoint hazir"
+              break
+            fi
+            sleep 2
+          done
           curl -fs http://localhost:8080/qa/ | grep -q "KYS Sorgu"
-          docker logs kys
+          curl -fs -H "Authorization: Bearer test-token" http://localhost:8080/qa/api/health | grep -q "healthy"
+          docker logs kys-main
+
+  image-ai:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/ai'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/ak21039/kys-agent-ai:latest
+            ghcr.io/ak21039/kys-agent-ai:${{ github.sha }}
+      - name: Duman testi (ai - nginx + uvicorn + supervisor)
+        run: |
+          docker run -d --name kys-ai -p 8080:8080 \
+            -e KYS_BASE_PATH=/qa \
+            -e KYS_ACCESS_TOKEN=test-token \
+            -e KYS_DB_URL= \
+            ghcr.io/ak21039/kys-agent-ai:${{ github.sha }}
+          for i in $(seq 1 45); do
+            if curl -fs http://localhost:8080/qa/api/health >/dev/null 2>&1; then
+              echo "Health endpoint hazir"
+              break
+            fi
+            sleep 2
+          done
+          curl -fs http://localhost:8080/qa/ | grep -q "KYS Sorgu"
+          curl -fs -H "Authorization: Bearer test-token" http://localhost:8080/qa/api/health | grep -q "healthy"
+          docker logs kys-ai
