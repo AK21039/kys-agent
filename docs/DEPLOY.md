@@ -77,3 +77,41 @@ veya Origin Rule) ile konteynere bağlanır. Cloudflare Access ile e-posta taban
 ```powershell
 kys serve --port 8000     # http://localhost:8000/qa/
 ```
+
+## Frontend Konteyner ve Cloud Run Ücretsiz Kota Dağıtımı
+
+Frontend uygulaması (React SPA), Cloud Run üzerinde ücretsiz kotada kalacak şekilde hafif Nginx konteyneri olarak paketlenmiştir:
+
+### 1. Yerel Konteyner Derleme ve Çalıştırma
+
+```bash
+docker build -t kys-frontend:latest .
+docker run -p 8080:8080 -e PORT=8080 kys-frontend:latest
+```
+
+### 2. Google Cloud Run'a Dağıtım (Ücretsiz Kota Ayarları)
+
+Cloud Run'ın aylık 2 milyon istek ve ücretsiz CPU/RAM kotasında kalmasını garanti eden dağıtım komutu:
+
+```bash
+gcloud run deploy kys-frontend \
+  --source . \
+  --platform managed \
+  --region europe-west2 \
+  --allow-unauthenticated \
+  --min-instances 0 \
+  --max-instances 2 \
+  --memory 128Mi \
+  --cpu 1 \
+  --concurrency 80 \
+  --port 8080
+```
+
+*Not: `--min-instances 0` ayarı sayesinde sistem kullanılmadığında konteyner uyur ve fatura bedeli 0 TL kalır.*
+
+### 3. Cloudflare Tüneli ve Ofis PC Arka Uç Bağlantısı
+
+Arayüz açıldığında sağ üstteki **Ayarlar** menüsünden:
+- **API Base URL:** `https://kys-backend.paktenops.com` (veya Cloudflare tunnel uç noktası)
+- **KYS Erişim Belirteci:** Eğer `KYS_ACCESS_TOKEN` tanımlıysa token girilir.
+Tarayıcı tüm sorguları, çakışma analizlerini ve karar denetimlerini Cloudflare üzerinden ofis PC'nizdeki FastAPI servisine iletir.
