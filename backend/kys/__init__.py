@@ -1,0 +1,1 @@
+"""KYS Ajan Sistemi."""
