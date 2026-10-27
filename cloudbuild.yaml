@@ -22,12 +22,11 @@ steps:
       - '--memory=1Gi'
       - '--cpu=1'
       - '--min-instances=0'
-      - '--max-instances=10'
+      - '--max-instances=2'
       - '--set-env-vars=KYS_BASE_PATH=/qa'
       - '--set-env-vars=KYS_DB_URL=https://storage.googleapis.com/kys-agent-db/kys.db'
       - '--set-secrets=KYS_ACCESS_TOKEN=kys-access-token:latest'
       - '--set-secrets=GEMINI_API_KEY=gemini-api-key:latest'
-      - '--set-secrets=KYS_OPENAI_API_KEY=openai-api-key:latest'
 
 # Sizi kilitleyen hatayı çözen kritik ayar:
 options:
