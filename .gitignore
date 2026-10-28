@@ -8,7 +8,5 @@ data/
 !data/.gitkeep
 node_modules/
 .next/
-
-# AI Studio web istemcisi derlemesi (infra/build_web.py); .gcloudignore/.dockerignore dışında bırakılır
-web-dist/
-web-dist.zip
+dist/
+*.bundle

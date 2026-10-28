@@ -5,6 +5,9 @@
 .env
 data
 docs
+node_modules
+dist
 **/__pycache__
 **/*.egg-info
 backend/tests
+*.log

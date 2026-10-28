@@ -19,6 +19,8 @@ Yollar KYS_BASE_PATH altındadır (varsayılan /qa → paktenops.com/qa):
     POST /qa/api/review/rules/{id}              {action: ONAYLA|DUZELT|REDDET, note?, reviewer?, edits?} — yalnız
                                                KYS_WRITABLE=1 iken yazar; kapalıyken 409 {code:"SALT_OKUNUR"}
     POST /qa/api/review/rules/bulk               {ids:[...], action: ONAYLA|REDDET, note?, reviewer?} (<=200)
+    *    /qa/api/rules | findings | analysis/run | decisions | entities/resolutions
+                               AI Studio web uygulamasının uçları (bkz. webcompat.py)
     *    /qa/mcp               MCP (Streamable HTTP) — herhangi bir yapay zekâ istemcisi bağlanabilir
 """
 
@@ -42,6 +44,7 @@ from .. import config, db, review
 from ..llm import LLMError, LLMUnavailable
 from ..process import decisions, flow, matrix_io
 from ..query import assistant, catalog, pages
+from . import webcompat
 from .mcp_server import build_server
 
 log = logging.getLogger("kys.api")
@@ -359,6 +362,8 @@ def create_app(db_path: Path | str | None = None) -> FastAPI:
                 "detail": "Model şu an kullanılamıyor: " + detail, "code": "MODEL_YOK"})
         except LLMError as e:
             raise HTTPException(502, f"Model cevap veremedi: {e}") from e
+
+    webcompat.add_routes(app, base, conn, guarded, db_path, s.writable, _readonly_response)
 
     # API rotaları önce tanımlandı; kalan {base}/* istekleri (yalnızca /mcp) MCP uygulamasına gider.
     app.mount(base or "/", _TokenGuard(mcp_app, token))
