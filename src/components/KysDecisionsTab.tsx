@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { kysApi } from '../services/apiClient';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { kysApi, MatrixRowResult, MatrixRowStatus, MatrixDocCheck } from '../services/apiClient';
 import { DecisionItem, DocumentSummary, FindingItem, RuleItem } from '../types/kys';
 import {
   Scale,
@@ -13,7 +13,384 @@ import {
   X,
   Info,
   Trash2,
+  Upload,
+  Download,
+  FileSpreadsheet,
 } from 'lucide-react';
+
+// Matris kontrolü: satırlar sunucuya parça parça gönderilir (eski arayüzdeki DEC_CHUNK ile aynı).
+const MATRIX_CHUNK = 12;
+
+const STATUS_LABEL: Record<MatrixRowStatus, string> = {
+  KAYNAKLI: 'Kaynaklı',
+  CELISKI: 'Prosedüre aykırı',
+  KISMI: 'Kısmi',
+  KAYNAK_YOK: 'Kaynak yok',
+};
+const STATUS_HINT: Record<MatrixRowStatus, string> = {
+  KAYNAKLI: 'Dayanak bulundu; rol, limit ve süre dokümanla uyumlu.',
+  CELISKI: 'Dokümanda farklı karar verici, limit veya süre yazıyor.',
+  KISMI: 'Karar dokümanda geçiyor ama rol veya limit doğrulanamadı.',
+  KAYNAK_YOK: 'Hiçbir KYS dokümanında dayanak bulunamadı.',
+};
+const DOC_CHECK_LABEL: Record<MatrixDocCheck, string> = {
+  DOGRULANDI: 'Matristeki doküman doğrulandı',
+  DESTEKLEMIYOR: 'Matristeki doküman desteklemiyor',
+  SISTEMDE_YOK: 'Matristeki doküman sistemde yok',
+};
+
+const StatusTag: React.FC<{ status: MatrixRowStatus }> = ({ status }) => {
+  if (status === 'KAYNAKLI') {
+    return (
+      <span className="kys-clean-label" title={STATUS_HINT[status]}>
+        <CheckCircle2 size={13} className="text-ok shrink-0" />
+        <span>{STATUS_LABEL[status]}</span>
+      </span>
+    );
+  }
+  return (
+    <span className={`kys-finding-tag ${status === 'CELISKI' ? 'danger' : 'warn'}`} title={STATUS_HINT[status]}>
+      {status === 'CELISKI' ? <ShieldAlert size={12} className="shrink-0" /> : <AlertTriangle size={12} className="shrink-0" />}
+      <span>{STATUS_LABEL[status]}</span>
+    </span>
+  );
+};
+
+const roleText = (v: unknown): string => (Array.isArray(v) ? v.join(', ') : typeof v === 'string' ? v : '');
+
+/** Karar matrisi (xlsx/csv) yükleme → her satır için kaynaklı kontrol → sonuç tablosu ve Excel. Hiçbir şey kaydedilmez. */
+const MatrixCheckPanel: React.FC<{ onOpenDoc: (code: string) => void; onClose: () => void }> = ({ onOpenDoc, onClose }) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [rows, setRows] = useState<MatrixRowResult[]>([]);
+  const [total, setTotal] = useState<number>(0);
+  const [running, setRunning] = useState<boolean>(false);
+  const [downloading, setDownloading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [missingDocs, setMissingDocs] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<MatrixRowStatus | 'HEPSI'>('HEPSI');
+  const [sheetFilter, setSheetFilter] = useState<string>('HEPSI');
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const cancelRef = useRef<boolean>(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const run = async (f: File, resume: boolean) => {
+    cancelRef.current = false;
+    setRunning(true);
+    setError(null);
+    let done: MatrixRowResult[] = resume ? rows : [];
+    if (!resume) {
+      setRows([]);
+      setTotal(0);
+      setWarnings([]);
+      setMissingDocs([]);
+      setExpanded(null);
+    }
+    try {
+      let tot = resume ? total : Infinity;
+      while (done.length < tot && !cancelRef.current) {
+        const res = await kysApi.checkDecisionMatrix(f, done.length, MATRIX_CHUNK);
+        tot = res.aralik.toplam;
+        setTotal(tot);
+        if (done.length === 0) setWarnings(res.matris.uyarilar || []);
+        if (res.satirlar.length === 0) break;
+        done = [...done, ...res.satirlar];
+        setRows(done);
+        setMissingDocs((prev) => Array.from(new Set([...prev, ...res.ozet.sistemde_yok_dokumanlar])).sort());
+      }
+    } catch (err: unknown) {
+      setError(
+        (err instanceof Error ? err.message : 'Kontrol başarısız') +
+          (done.length ? ` · ${done.length} satır tamamlandı; "Devam et" ile kalanlar işlenir.` : '')
+      );
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    setFile(f);
+    run(f, false);
+  };
+
+  const download = async () => {
+    if (!file || rows.length === 0) return;
+    setDownloading(true);
+    try {
+      const blob = await kysApi.downloadDecisionMatrixXlsx(file, rows);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name.replace(/\.[^.]+$/, '') + '_kontrol.xlsx';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Excel oluşturulamadı');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const counts = useMemo(() => {
+    const c: Record<MatrixRowStatus, number> = { KAYNAKLI: 0, CELISKI: 0, KISMI: 0, KAYNAK_YOK: 0 };
+    rows.forEach((r) => (c[r.durum] += 1));
+    return c;
+  }, [rows]);
+  const sheets = useMemo(() => Array.from(new Set(rows.map((r) => r.sayfa || '-'))), [rows]);
+  const unverified = useMemo(() => rows.filter((r) => r.dogrulanmamis).length, [rows]);
+  const shown = useMemo(
+    () =>
+      rows.filter(
+        (r) => (statusFilter === 'HEPSI' || r.durum === statusFilter) && (sheetFilter === 'HEPSI' || (r.sayfa || '-') === sheetFilter)
+      ),
+    [rows, statusFilter, sheetFilter]
+  );
+  const pct = total ? Math.round((rows.length / total) * 100) : 0;
+  // İlk parça bile gelmeden hata olduysa toplam bilinmez; yine de yeniden denenebilir.
+  const incomplete = !running && file !== null && (total > 0 ? rows.length < total : error !== null);
+
+  return (
+    <div style={{ margin: '12px 16px', border: '1px solid var(--line)', borderRadius: 'var(--radius)', background: 'var(--panel)' }}>
+      <div className="kys-grid-toolbar">
+        <div className="kys-grid-title-group">
+          <FileSpreadsheet size={16} className="text-accent" />
+          <h2 className="kys-grid-title">Karar Matrisi Kontrolü</h2>
+          {file && <span className="kys-grid-count font-mono">{file.name}</span>}
+        </div>
+        <div className="kys-grid-filters">
+          <input ref={inputRef} type="file" accept=".xlsx,.xlsm,.csv" style={{ display: 'none' }} onChange={onPick} />
+          <button type="button" className="icon-btn kys-run-audit-btn" onClick={() => inputRef.current?.click()} disabled={running}>
+            <Upload size={14} />
+            <span>{file ? 'Başka Dosya' : 'Excel Seç'}</span>
+          </button>
+          {running && (
+            <button type="button" className="icon-btn" onClick={() => (cancelRef.current = true)}>
+              <X size={14} />
+              <span>Durdur</span>
+            </button>
+          )}
+          {incomplete && (
+            <button type="button" className="icon-btn" onClick={() => file && run(file, total > 0)}>
+              <RefreshCw size={14} />
+              <span>{rows.length ? 'Devam et' : 'Tekrar dene'}</span>
+            </button>
+          )}
+          <button type="button" className="icon-btn" onClick={download} disabled={running || downloading || rows.length === 0}>
+            <Download size={14} />
+            <span>{downloading ? 'Hazırlanıyor...' : 'Excel İndir'}</span>
+          </button>
+          <button type="button" className="icon-btn" onClick={onClose} disabled={running} title="Kapat">
+            <X size={14} />
+          </button>
+        </div>
+      </div>
+
+      {!file && (
+        <div className="kys-info-box" style={{ margin: '12px 16px' }}>
+          <Info size={16} className="text-accent shrink-0" />
+          <p>
+            Karar matrisinizi veya yetki limit tablonuzu (.xlsx / .csv; düz tablo ya da RACI) seçin. Her karar için
+            yürürlükteki KYS dokümanlarında dayanak aranır; bulunan alıntı kaynak metne karşı doğrulanır. Matristeki
+            karar verici, limit ve süre dokümanla karşılaştırılır; "İlgili Doküman" kolonu da ayrıca denetlenir.
+            Dosya sunucuda saklanmaz, sonuçlar kaydedilmez.
+          </p>
+        </div>
+      )}
+
+      {file && (
+        <div style={{ padding: '8px 16px' }}>
+          <div style={{ height: 6, background: 'var(--line)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent)', transition: 'width .3s' }} />
+          </div>
+          <div className="text-xs text-muted" style={{ marginTop: 4 }}>
+            {total ? `${rows.length} / ${total} satır kontrol edildi` : running ? 'Dosya okunuyor...' : 'Kontrol tamamlanamadı'}
+            {running && ' · çalışıyor (satır başına birkaç saniye sürebilir)'}
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="kys-alert-banner danger" style={{ margin: '0 16px 12px' }} title={error}>
+          <AlertTriangle size={16} />
+          {/* Model zinciri hataları sağlayıcının ham JSON'unu taşır; tamamı title'da */}
+          <span>{error.length > 280 ? `${error.slice(0, 280)}…` : error}</span>
+        </div>
+      )}
+
+      {warnings.length > 0 && (
+        <div className="text-xs text-muted" style={{ margin: '0 16px 8px' }}>
+          {warnings.map((w, i) => (
+            <div key={i}>! {w}</div>
+          ))}
+        </div>
+      )}
+
+      {rows.length > 0 && (
+        <>
+          <div className="kys-grid-filters" style={{ padding: '0 16px 8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className={`icon-btn ${statusFilter === 'HEPSI' ? 'kys-run-audit-btn' : ''}`}
+              onClick={() => setStatusFilter('HEPSI')}
+            >
+              Tümü ({rows.length})
+            </button>
+            {(Object.keys(STATUS_LABEL) as MatrixRowStatus[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`icon-btn ${statusFilter === s ? 'kys-run-audit-btn' : ''}`}
+                onClick={() => setStatusFilter(s)}
+                title={STATUS_HINT[s]}
+              >
+                {STATUS_LABEL[s]} ({counts[s]})
+              </button>
+            ))}
+            {sheets.length > 1 && (
+              <select
+                value={sheetFilter}
+                onChange={(e) => setSheetFilter(e.target.value)}
+                style={{ width: 'auto', padding: '4px 8px', fontSize: '12px' }}
+              >
+                <option value="HEPSI">Tüm sayfalar</option>
+                {sheets.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            )}
+            {unverified > 0 && (
+              <span className="text-xs text-muted">· {unverified} satır doğrulanmamış (onaysız) kurala dayanıyor</span>
+            )}
+          </div>
+          {missingDocs.length > 0 && (
+            <div className="text-xs text-muted" style={{ margin: '0 16px 8px' }}>
+              Sistemde olmayan dokümanlar: <span className="font-mono">{missingDocs.join(', ')}</span>
+            </div>
+          )}
+
+          <div className="kys-table-container">
+            <table className="kys-table" aria-label="Karar Matrisi Kontrol Sonuçları">
+              <thead>
+                <tr>
+                  <th scope="col" className="kys-th" style={{ width: '140px' }}>SAYFA / SATIR</th>
+                  <th scope="col" className="kys-th">KARAR</th>
+                  <th scope="col" className="kys-th" style={{ width: '170px' }}>KARAR VERİCİ (MATRİS)</th>
+                  <th scope="col" className="kys-th" style={{ width: '200px' }}>DAYANAK</th>
+                  <th scope="col" className="kys-th" style={{ width: '170px' }}>DURUM</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((r) => {
+                  const key = r.no;
+                  const open = expanded === key;
+                  const deciders = roleText(r.girdi.karar_verici) || roleText(r.girdi.onaylayan) || roleText(r.girdi.yetkili);
+                  return (
+                    <React.Fragment key={key}>
+                      <tr
+                        className={`kys-table-row ${r.durum === 'CELISKI' ? 'has-findings' : ''}`}
+                        onClick={() => setExpanded(open ? null : key)}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td className="kys-td text-xs text-muted">
+                          {r.sayfa || '-'} · {r.satir}
+                        </td>
+                        <td className="kys-td">
+                          <span className="kys-doc-name">{r.karar}</span>
+                          {typeof r.girdi.ilgili_dokuman === 'string' && r.girdi.ilgili_dokuman && (
+                            <span className="kys-doc-summary-hint">Matristeki doküman: {r.girdi.ilgili_dokuman}</span>
+                          )}
+                        </td>
+                        <td className="kys-td text-xs">{deciders || '—'}</td>
+                        <td className="kys-td font-mono text-xs">
+                          {r.kaynaklar.length === 0
+                            ? <span className="text-muted">—</span>
+                            : r.kaynaklar.map((s, i) => (
+                                <div key={i}>
+                                  {s.doc_code ? (
+                                    <button
+                                      type="button"
+                                      className="kys-code-link"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onOpenDoc(s.doc_code as string);
+                                      }}
+                                    >
+                                      {s.doc_code}
+                                      {s.revision ? ` Rev.${s.revision}` : ''}
+                                      {s.clause_no ? ` M.${s.clause_no}` : ''}
+                                    </button>
+                                  ) : (
+                                    <span className="text-muted">kodsuz doküman</span>
+                                  )}
+                                </div>
+                              ))}
+                        </td>
+                        <td className="kys-td">
+                          <StatusTag status={r.durum} />
+                          {r.dogrulanmamis && (
+                            <div className="text-xs text-muted" style={{ fontSize: '11px', marginTop: 2 }}>
+                              [Doğrulanmamış kaynak]
+                            </div>
+                          )}
+                          {r.dokuman_kontrolu && (
+                            <div className="text-xs text-muted" style={{ fontSize: '11px', marginTop: 2 }}>
+                              {DOC_CHECK_LABEL[r.dokuman_kontrolu]}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                      {open && (
+                        <tr>
+                          <td colSpan={5} className="kys-td" style={{ background: 'var(--panel-hover)' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '12px' }}>
+                              <div>{r.aciklama}</div>
+                              {r.celiskiler.map((c, i) => (
+                                <div key={i} style={{ color: 'var(--danger)' }}>
+                                  <strong>{c.alan}:</strong> matriste "{c.matris}", dokümanda "{c.dokuman}" ({c.kaynak})
+                                </div>
+                              ))}
+                              {r.kaynaklar.map((s, i) => (
+                                <blockquote
+                                  key={i}
+                                  style={{ margin: 0, padding: '6px 10px', borderLeft: '3px solid var(--accent)', background: 'var(--panel)' }}
+                                >
+                                  <div className="font-mono text-xs text-muted">
+                                    {s.doc_code || 'kodsuz'}
+                                    {s.revision ? ` Rev.${s.revision}` : ''}
+                                    {s.clause_no ? ` · Madde ${s.clause_no}` : ''}
+                                    {s.heading ? ` · ${s.heading}` : ''}
+                                    {s.dogrulanmamis ? ' · [Doğrulanmamış kaynak]' : ''}
+                                  </div>
+                                  <div>"{s.quote}"</div>
+                                </blockquote>
+                              ))}
+                              {r.uyarilar.length > 0 && (
+                                <div className="text-xs text-muted">
+                                  {r.uyarilar.map((w, i) => (
+                                    <div key={i}>! {w}</div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 export interface KysDecisionsTabProps {
   documents: DocumentSummary[];
@@ -54,6 +431,8 @@ export const KysDecisionsTab: React.FC<KysDecisionsTabProps> = ({
   const [formSourceDoc, setFormSourceDoc] = useState<string>('');
   const [formSourceClause, setFormSourceClause] = useState<string>('');
   const [formRuleSummary, setFormRuleSummary] = useState<string>('');
+
+  const [showMatrix, setShowMatrix] = useState<boolean>(false);
 
   // Verification Results cache
   const [verifications, setVerifications] = useState<Record<number, DecisionVerificationResult>>({});
@@ -328,6 +707,16 @@ export const KysDecisionsTab: React.FC<KysDecisionsTabProps> = ({
           <button
             type="button"
             className="icon-btn kys-run-audit-btn"
+            onClick={() => setShowMatrix(true)}
+            disabled={showMatrix}
+          >
+            <Upload size={14} />
+            <span>Matris Yükle ve Kontrol Et</span>
+          </button>
+
+          <button
+            type="button"
+            className="icon-btn kys-run-audit-btn"
             onClick={() => setShowAddModal(true)}
           >
             <Plus size={14} />
@@ -335,6 +724,8 @@ export const KysDecisionsTab: React.FC<KysDecisionsTabProps> = ({
           </button>
         </div>
       </div>
+
+      {showMatrix && <MatrixCheckPanel onOpenDoc={onOpenDoc} onClose={() => setShowMatrix(false)} />}
 
       {/* Info notice */}
       <div className="kys-info-box" style={{ margin: '12px 16px' }}>
