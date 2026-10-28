@@ -1,3 +1,11 @@
+# ⚠️ KESİN KURAL: KULLANICI ONAYI OLMADAN KODLAMA YAPILAMAZ
+> **KALICI TALİMATLAR (DEĞİŞTİRİLEMEZ):**
+> 1. **DİL VE MİMARİ:** Dil kesinlikle **Python** kalacaktır. `backend/` yapısı ve `CLAUDE.md` kuralları eksiksiz korunacaktır.
+> 2. **GÖREV SINIRI:** Yalnızca kullanıcının açıkça verdiği görev yapılacaktır; inisiyatif alarak başka framework'e çevirme, mimari dönüştürme veya fazladan işlem yapılamaz.
+> 3. **AÇIK KULLANICI ONAYI:** Kullanıcının açık ve net onayı olmadan **HİÇBİR kodlama, framework değişikliği, dosya silme veya mimari müdahale YAPILAMAZ.**
+> 4. **AÇIKLAMA VE ONAY İSTEMİ:** Yapılması planlanan her değişiklik ve işlem önce kullanıcıya gerekçesi, kapsamı ve yöntemiyle açıkça anlatılacak ve kullanıcının onayı istenecektir. Kullanıcı "Onaylıyorum" demeden tek bir satır kod yazılamaz veya değiştirilemez.
+> 5. **KAYNAK VE DOĞRULAMA:** Kaynağı olmayan, doğrulanmamış veya sentetik hiçbir veri sisteme dahil edilemez ("Kanıtsız bulgu yok").
+
 # KYS Ajan Sistemi — Geliştirici Rehberi
 
 Kalite Yönetim Sistemi dokümanlarını ilişkisel bir bilgi tabanına dönüştüren ve üzerinde uygunluk, yetki ve
@@ -40,15 +48,28 @@ PowerShell (kullanıcı):
 # karar matrisi: karar-kontrol DOSYA.xlsx [--out cikti.xlsx] [--json yol]
 # rol birleştirme: rol-grupla [--tip ROL|BIRIM] [--esik 0.85] → Excel'de KARAR doldur → rol-onayla DOSYA.xlsx [--apply]
 #   (kararlar data/kys_role_merges.json'da; extract-import sonunda otomatik yeniden uygulanır)
-& "$env:LOCALAPPDATA\kys-agent\.venv\Scripts\python.exe" infra\build_web.py   # ai dalından web uygulaması
 ```
-Güncel durum, açık işler ve canlı adresler: [docs/DURUM.md](docs/DURUM.md). `ai` dalı AI Studio'nundur; **main'e
-merge edilmez**. cmd.exe kapalıdır: npm/npx yerine `node .../npm-cli.js`, `.cmd` yerine doğrudan exe/`powershell`.
+Güncel durum, açık işler ve canlı adresler: [docs/DURUM.md](docs/DURUM.md). Web arayüzü (React/TS, AI Studio) `src/`
+altındadır ve backend'le aynı daldadır; backend onu `{KYS_BASE_PATH}/app/` altından sunar, arayüzün beklediği
+uçlar `api/webcompat.py`'dedir. cmd.exe kapalıdır: npm/npx yerine `node .../npm-cli.js`, `.cmd` yerine doğrudan
+exe/`powershell`. Vite derlemesi bitince `net use`'u cmd ile çağırıp takılır; önce `$env:ComSpec` PowerShell'e
+ayarlanır (`node node_modules\vite\bin\vite.js build`).
 Bash (geliştirme):
 ```bash
 PY="$LOCALAPPDATA/kys-agent/.venv/Scripts/python.exe"
 (cd backend && "$PY" -m pytest -q -p no:cacheprovider)
 ```
+
+## Git ve Dağıtım
+
+Tek kalıcı dal `main`'dir; değişiklik ayrı dalda yapılır, PR ile `main`'e alınır (merge'ü kullanıcı yapar).
+GitHub kimliği `gh` CLI oturumundan gelir (`gh auth setup-git` bir kez çalıştırılır; anahtar Windows anahtar
+deposunda durur). Düz `git push origin <dal>` ve `gh pr create` yeterlidir; token ortam değişkenine veya komuta
+yazılmaz. `gh auth status` oturum yoksa kullanıcıdan `gh auth login` istenir.
+
+Canlı: Cloud Run `kys-qa` (proje `gen-lang-client-0066123286`, europe-west1) → qa.paktenops.com (Cloudflare Worker +
+Access). Deploy elle: `gcloud builds submit --config cloudbuild.yaml --project gen-lang-client-0066123286`; yalnız imaj
+değişir, servisin env/secret/`/data` bucket'ı korunur.
 
 ## LLM sağlayıcıları
 
