@@ -12,3 +12,5 @@ infra
 **/*.egg-info
 **/*.pyc
 backend/tests
+node_modules
+dist
