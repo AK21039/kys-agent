@@ -200,6 +200,84 @@ export async function fetchWithAuth(path: string, init: RequestInit = {}): Promi
   return response;
 }
 
+// ---- Karar matrisi kontrolü (backend: process/decisions.py; alan adları backend'in JSON'uyla aynı) ----
+export type MatrixRowStatus = 'KAYNAKLI' | 'CELISKI' | 'KISMI' | 'KAYNAK_YOK';
+export type MatrixDocCheck = 'DOGRULANDI' | 'DESTEKLEMIYOR' | 'SISTEMDE_YOK';
+
+export interface MatrixSource {
+  doc_code: string | null;
+  revision: string | null;
+  title: string | null;
+  clause_no: string | null;
+  heading: string | null;
+  quote: string;
+  iliski: string;
+  dogrulanmamis: boolean;
+  kodsuz: boolean;
+  dokuman_onaylayanlar: string[];
+  nicelikler: string[];
+}
+
+export interface MatrixConflict {
+  alan: string;
+  matris: string;
+  dokuman: string;
+  kaynak: string;
+}
+
+export interface MatrixRowResult {
+  no: number;
+  sayfa: string | null;
+  satir: number;
+  karar: string;
+  girdi: Record<string, unknown>;
+  durum: MatrixRowStatus;
+  aciklama: string;
+  dokuman_kontrolu: MatrixDocCheck | null;
+  kaynaklar: MatrixSource[];
+  ilgili: MatrixSource[];
+  celiskiler: MatrixConflict[];
+  dogrulanmamis: boolean;
+  atilan_kaynak: number;
+  uyarilar: string[];
+  [key: string]: unknown;
+}
+
+export interface MatrixCheckResponse {
+  ozet: { toplam_satir: number; kontrol_edilen: number; sistemde_yok_dokumanlar: string[] };
+  matris: { uyarilar: string[] };
+  satirlar: MatrixRowResult[];
+  aralik: { baslangic: number; adet: number; toplam: number };
+}
+
+async function postMatrix(file: File, params: Record<string, string>, results?: string): Promise<Response> {
+  const fd = new FormData();
+  fd.append('file', file);
+  if (results !== undefined) fd.append('results', results);
+  const headers: Record<string, string> = {};
+  const sessionLlm = getLlmSessionConfig();
+  if (sessionLlm) {
+    headers['X-LLM-Provider'] = sessionLlm.provider;
+    headers['X-LLM-Key'] = sessionLlm.key;
+  }
+  const res = await fetchWithAuth(`/api/decisions/check?${new URLSearchParams(params)}`, {
+    method: 'POST',
+    headers,
+    body: fd,
+  });
+  if (!res.ok) {
+    let msg = `Karar matrisi kontrolü başarısız (${res.status})`;
+    try {
+      const j = await res.json();
+      if (j.detail) msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail);
+    } catch {
+      // ignore
+    }
+    throw new Error(msg);
+  }
+  return res;
+}
+
 export const kysApi = {
   getApiConfig,
   setApiConfig,
@@ -550,6 +628,19 @@ export const kysApi = {
       throw new Error(errMsg);
     }
     return res.json();
+  },
+
+  /** Karar matrisini (xlsx/csv) KYS dokümanlarına karşı kontrol eder (backend: POST /api/decisions/check).
+   *  Uzun istek zaman aşımına uğramasın diye satırlar `offset`/`limit` ile parça parça istenir. Dosya saklanmaz. */
+  async checkDecisionMatrix(file: File, offset: number, limit: number): Promise<MatrixCheckResponse> {
+    const res = await postMatrix(file, { offset: String(offset), limit: String(limit) });
+    return res.json();
+  },
+
+  /** Önceden alınmış satır sonuçlarını orijinal dosyaya kolon olarak ekleyip Excel döndürür; LLM çağrısı yapmaz. */
+  async downloadDecisionMatrixXlsx(file: File, rows: MatrixRowResult[]): Promise<Blob> {
+    const res = await postMatrix(file, { format: 'xlsx' }, JSON.stringify(rows));
+    return res.blob();
   },
 
   async getFindings(params?: {
