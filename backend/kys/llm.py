@@ -6,6 +6,7 @@ Sağlayıcı katman bazında seçilir (config: KYS_MODEL_FAST / KYS_MODEL_SMART 
 - openai: OpenAI uyumlu herhangi bir uç nokta (KYS_OPENAI_BASE_URL); GLM, Workers AI, OpenRouter...
 - gemini: Google'ın OpenAI uyumlu uç noktası (GEMINI_API_KEY)
 Sorgu katmanı (KYS_MODEL_QUERY) virgüllü model zinciridir; hata/kota durumunda sıradaki denenir.
+429/503 gibi geçici hatalarda aynı model önce kısa beklemelerle yeniden denenir (KYS_LLM_RETRY_DELAYS).
 Durma nedeni kontrolü ve `llm_calls` loglaması her iki sağlayıcı için burada yapılır.
 """
 
@@ -13,6 +14,7 @@ import copy
 import logging
 import json
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 from contextvars import ContextVar
@@ -81,6 +83,11 @@ class LLMUnavailable(LLMError):
 last_model: ContextVar[str | None] = ContextVar("kys_llm_last_model", default=None)
 
 
+# Geçici yoğunluk/kota hataları: aynı model `settings.retry_delays` kadar bekleyip yeniden denenir.
+RETRY_STATUSES = (429, 503)
+_sleep = time.sleep  # testler gerçek bekleme yapmasın diye değiştirir
+
+
 def _redact(text: str, *secrets: str | None) -> str:
     for sec in secrets:
         if sec:
@@ -118,22 +125,29 @@ def structured(
     for spec in chain:
         call = {"ollama": _ollama, "openai": _openai, "gemini": _gemini}.get(spec.provider, _anthropic)
         kwargs = {"api_key": api_key} if api_key and spec.provider in ("gemini", "anthropic") else {}
-        try:
-            out, usage, stop = call(spec.model, system, user, schema, max_tokens, effort, **kwargs)
-        except Exception as e:  # beklenmeyen hata da (ör. geçersiz başlık) zinciri kesmez, sıradakine geçilir
-            msg = _redact(str(e), api_key, settings.gemini_api_key, settings.openai_api_key)
-            if not isinstance(e, LLMError):
-                msg = f"{type(e).__name__}: {msg}"
-            status = getattr(e, "status", None)
-            kind = "kalıcı hata" if status in (400, 401, 403) else "geçici/diğer hata"
-            log.warning("%s: %s düştü (%s%s): %s", purpose, spec, kind, f" HTTP {status}" if status else "", msg)
-            _log(conn, purpose=purpose, model=str(spec), usage=getattr(e, "usage", None),
-                 stop_reason=getattr(e, "stop", None), ok=False, error=msg, ref=ref)
-            attempts.append((str(spec), msg))
-            continue
-        _log(conn, purpose=purpose, model=str(spec), usage=usage, stop_reason=stop, ok=True, ref=ref)
-        last_model.set(str(spec))
-        return out
+        delays = list(settings.retry_delays)
+        while True:
+            try:
+                out, usage, stop = call(spec.model, system, user, schema, max_tokens, effort, **kwargs)
+            except Exception as e:  # beklenmeyen hata da (ör. geçersiz başlık) zinciri kesmez, sıradakine geçilir
+                msg = _redact(str(e), api_key, settings.gemini_api_key, settings.openai_api_key)
+                if not isinstance(e, LLMError):
+                    msg = f"{type(e).__name__}: {msg}"
+                status = getattr(e, "status", None)
+                _log(conn, purpose=purpose, model=str(spec), usage=getattr(e, "usage", None),
+                     stop_reason=getattr(e, "stop", None), ok=False, error=msg, ref=ref)
+                if status in RETRY_STATUSES and delays:
+                    wait = delays.pop(0)
+                    log.info("%s: %s HTTP %s, %.0f sn sonra yeniden denenecek", purpose, spec, status, wait)
+                    _sleep(wait)
+                    continue
+                kind = "kalıcı hata" if status in (400, 401, 403) else "geçici/diğer hata"
+                log.warning("%s: %s düştü (%s%s): %s", purpose, spec, kind, f" HTTP {status}" if status else "", msg)
+                attempts.append((str(spec), msg))
+                break
+            _log(conn, purpose=purpose, model=str(spec), usage=usage, stop_reason=stop, ok=True, ref=ref)
+            last_model.set(str(spec))
+            return out
     summary = "; ".join(f"{m} → {err}" for m, err in attempts)
     raise LLMUnavailable(f"{purpose}: hiçbir model cevap veremedi ({summary})", attempts)
 

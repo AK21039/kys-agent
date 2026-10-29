@@ -185,7 +185,8 @@ SECRET = "SIR-ANAHTAR-123"
 def _chain(monkeypatch, value, **extra):
     from kys.config import parse_chain
     monkeypatch.setattr(llm, "settings", dataclasses.replace(
-        llm.settings, model_query=parse_chain(value), gemini_api_key=extra.pop("gemini_api_key", "g-env"), **extra))
+        llm.settings, model_query=parse_chain(value), gemini_api_key=extra.pop("gemini_api_key", "g-env"),
+        retry_delays=extra.pop("retry_delays", ()), **extra))
 
 
 def _http_error(req, code, body=b"hata"):
@@ -309,3 +310,54 @@ def test_byok_provider_not_in_chain(monkeypatch):
     _chain(monkeypatch, "gemini:m1")
     with pytest.raises(llm.LLMUnavailable, match="anthropic"):
         llm.structured(purpose="s", tier="query", system="S", user="U", schema=Out, byok=("anthropic", "k"))
+
+
+# --- Geçici hatada yeniden deneme -------------------------------------------------
+
+def test_transient_503_retries_same_model_with_backoff(conn, monkeypatch):
+    _chain(monkeypatch, "gemini:m1,gemini:m2", retry_delays=(2.0, 6.0))
+    sleeps, seen = [], []
+    monkeypatch.setattr(llm, "_sleep", sleeps.append)
+
+    def urlopen(req, timeout):
+        seen.append(json.loads(req.data)["model"])
+        if len(seen) <= 2:
+            raise _http_error(req, 503)
+        return _openai_reply('{"value": "ok"}')
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    out = llm.structured(purpose="s", tier="query", system="S", user="U", schema=Out, conn=conn)
+    assert out.value == "ok" and llm.last_model.get() == "gemini:m1"
+    assert seen == ["m1", "m1", "m1"] and sleeps == [2.0, 6.0]
+    rows = [(r["model"], r["ok"]) for r in conn.execute("SELECT model, ok FROM llm_calls ORDER BY id")]
+    assert rows == [("gemini:m1", 0), ("gemini:m1", 0), ("gemini:m1", 1)]
+
+
+def test_persistent_429_moves_to_next_model_after_retries(monkeypatch):
+    _chain(monkeypatch, "gemini:m1,gemini:m2", retry_delays=(1.0, 3.0))
+    sleeps, seen = [], []
+    monkeypatch.setattr(llm, "_sleep", sleeps.append)
+
+    def urlopen(req, timeout):
+        model = json.loads(req.data)["model"]
+        seen.append(model)
+        if model == "m1":
+            raise _http_error(req, 429, b"kota")
+        return _openai_reply('{"value": "ok"}')
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    assert llm.structured(purpose="s", tier="query", system="S", user="U", schema=Out).value == "ok"
+    assert seen == ["m1", "m1", "m1", "m2"] and sleeps == [1.0, 3.0]
+
+
+def test_permanent_error_is_not_retried(monkeypatch):
+    _chain(monkeypatch, "gemini:m1,gemini:m2", retry_delays=(2.0, 6.0))
+    sleeps, seen = [], []
+    monkeypatch.setattr(llm, "_sleep", sleeps.append)
+
+    def urlopen(req, timeout):
+        seen.append(json.loads(req.data)["model"])
+        raise _http_error(req, 403)
+    monkeypatch.setattr(llm.urllib.request, "urlopen", urlopen)
+    with pytest.raises(llm.LLMUnavailable) as ei:
+        llm.structured(purpose="s", tier="query", system="S", user="U", schema=Out)
+    assert seen == ["m1", "m2"] and sleeps == []
+    assert [m for m, _ in ei.value.attempts] == ["gemini:m1", "gemini:m2"]
