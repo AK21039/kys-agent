@@ -63,6 +63,7 @@ class Settings:
     allowed_hosts: tuple[str, ...]  # MCP için Host başlığı beyaz listesi (boşsa kontrol yok)
     gemini_api_key: str = ""        # GEMINI_API_KEY
     remote_timeout: int = 90        # openai/gemini istek zaman aşımı (sn); zincirde takılmayı önler
+    retry_delays: tuple[float, ...] = (2.0, 6.0)  # 429/503'te aynı modeli yeniden denemeden önceki beklemeler (sn)
     cors_origins: tuple[str, ...] = ()  # KYS_CORS_ORIGINS; boşsa CORS kapalı
     inbox_dir: Path = Path("data/inbox")  # zamanlanmış yüklemenin okuduğu doküman klasörü (KYS_INBOX_DIR)
     pages_dir: Path | None = None   # önceden üretilmiş PDF sayfa PNG'leri: <pages_dir>/<dosya_sha256>/<n>.png
@@ -96,6 +97,7 @@ settings = Settings(
     openai_api_key=os.getenv("KYS_OPENAI_API_KEY", "").strip(),  # secret/dosyadan gelen satır sonu başlığı bozar
     gemini_api_key=os.getenv("GEMINI_API_KEY", "").strip(),
     remote_timeout=int(os.getenv("KYS_REMOTE_TIMEOUT", "90")),
+    retry_delays=tuple(float(d) for d in os.getenv("KYS_LLM_RETRY_DELAYS", "2,6").split(",") if d.strip()),
     cors_origins=tuple(o.strip().rstrip("/") for o in os.getenv("KYS_CORS_ORIGINS", "").split(",") if o.strip()),
     base_path="/" + os.getenv("KYS_BASE_PATH", "/qa").strip("/"),
     access_token=os.getenv("KYS_ACCESS_TOKEN", ""),

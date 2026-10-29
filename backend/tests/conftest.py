@@ -16,6 +16,13 @@ def isolated_overrides(tmp_path, monkeypatch):
                                             role_merges_path=tmp_path / "role_merges.json"))
 
 
+@pytest.fixture(autouse=True)
+def no_llm_sleep(monkeypatch):
+    """LLM yeniden denemelerinde testler gerçekten beklemez."""
+    from kys import llm
+    monkeypatch.setattr(llm, "_sleep", lambda seconds: None)
+
+
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "test.db")
